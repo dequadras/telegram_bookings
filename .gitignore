@@ -1,3 +1,6 @@
 *.db
 __pycache__/
 .env
+.DS_Store
+.vscode/
+*.mp4

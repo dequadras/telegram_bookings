@@ -2,6 +2,7 @@
 CREATE TABLE IF NOT EXISTS users (
     telegram_id INTEGER PRIMARY KEY,
     username TEXT,
+    password TEXT,
     first_name TEXT,
     last_name TEXT,
     subscription_status TEXT DEFAULT 'free',
@@ -33,4 +34,14 @@ CREATE TABLE IF NOT EXISTS payments (
     payment_type TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
-); 
+);
+
+-- Missing indexes for frequently queried columns
+CREATE INDEX IF NOT EXISTS idx_bookings_status_date ON bookings(status, booking_date);
+CREATE INDEX IF NOT EXISTS idx_bookings_telegram_id ON bookings(telegram_id);
+
+-- Missing constraints
+ALTER TABLE bookings ADD CONSTRAINT check_status
+    CHECK (status IN ('pending', 'completed', 'failed'));
+ALTER TABLE users ADD CONSTRAINT check_subscription_status
+    CHECK (subscription_status IN ('free', 'paid'));

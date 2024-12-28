@@ -8,3 +8,11 @@ black
 flake8
 isort
 python-dotenv
+xvfbwrapper
+pyvirtualdisplay
+# xvfb ubuntu
+numpy
+opencv-python
+pillow
+pytest
+pytest-asyncio

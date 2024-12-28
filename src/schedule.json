@@ -129,7 +129,7 @@
       "booking_opens_days_ahead": 1
     }
   },
-  "tennis": {
+  "tenis": {
     "time_slots": [
       {
         "start_time": "07:00",
@@ -214,4 +214,4 @@
       "booking_opens_days_ahead": 1
     }
   }
-} 
+}
