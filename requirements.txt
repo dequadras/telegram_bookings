@@ -1,0 +1,10 @@
+python-telegram-bot
+APScheduler
+selenium
+# playwright
+stripe
+pre-commit
+black
+flake8
+isort
+python-dotenv
