@@ -1,6 +1,9 @@
 import os
 from dataclasses import dataclass
+from dotenv import load_dotenv
 
+# Load .env file at the start
+load_dotenv()
 
 @dataclass
 class BotConfig:

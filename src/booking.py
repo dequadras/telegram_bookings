@@ -1,23 +1,28 @@
 import asyncio
 import json
+import logging
 import sqlite3
 import time
 from datetime import datetime, timedelta
 
 import cv2
 import numpy as np
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
 
 # todo manage multiple bookings at once
 # todo check that I can book in the most wanted spots (eg do my own telegram bookings)
 # todo retry booking if it fails
+# todo payments should be handled on a token basis (not subscription)
+
+# Add at the top of the file, after imports
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S")
 
 
 async def handle_many_bookings(test=False):
@@ -25,34 +30,8 @@ async def handle_many_bookings(test=False):
     Handle all pending bookings for tomorrow. Executed at 7am each day.
     Processes multiple bookings concurrently using asyncio.
     """
-    # Connect to the database
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
-
-    # Get tomorrow's date in YYYY-MM-DD format
-    tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    if not test:
-        # Get all pending bookings for tomorrow
-        cursor.execute(
-            """
-            SELECT b.id, b.telegram_id, b.booking_time, u.username, u.password, u.first_name, b.sport, b.player_nifs
-        FROM bookings b
-        JOIN users u ON b.telegram_id = u.telegram_id
-            WHERE b.booking_date = ? AND b.status = 'pending'
-        """,
-            (tomorrow,),
-        )
-
-        bookings = cursor.fetchall()
-        conn.close()
-    else:
-        bookings = [
-            # booking_id, telegram_id, booking_time, username, password,, sport, player_nifs
-            (1, "123456", "10:00", "46151293E", "Luis1992", "tenis", '["60105994W"]'),
-            (2, "789012", "11:00", "46152627E", "Lucas1994", "tenis", '["60432112A"]'),
-        ]
-
+    bookings = get_todays_bookings(test=test)
+    logging.info(f"Processing {len(bookings)} bookings: {bookings}")
     # Create tasks for each booking
     tasks = []
     for booking_id, telegram_id, booking_time, username, password, sport, player_nifs in bookings:
@@ -76,8 +55,40 @@ async def handle_many_bookings(test=False):
         await asyncio.gather(*tasks)
 
 
+def get_todays_bookings(test=False):
+    if not test:
+        # Connect to the database
+        conn = sqlite3.connect("bookings.db")
+        cursor = conn.cursor()
+
+        # Get tomorrow's date in YYYY-MM-DD format
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        # Get all pending bookings for tomorrow
+        cursor.execute(
+            """
+            SELECT b.id, b.telegram_id, b.booking_time, u.username, u.password, b.sport, b.player_nifs
+        FROM bookings b
+        JOIN users u ON b.telegram_id = u.telegram_id
+            WHERE b.booking_date = ? AND b.status = 'pending'
+        """,
+            (tomorrow,),
+        )
+
+        bookings = cursor.fetchall()
+        conn.close()
+    else:
+        bookings = [
+            # booking_id, telegram_id, booking_time, username, password,, sport, player_nifs
+            (1, "123456", "10:00", "46151293E", "Luis1992", "tenis", '["60105994W"]'),
+            (2, "789012", "11:00", "46152627E", "Lucas1994", "tenis", '["60432112A"]'),
+        ]
+    return bookings
+
+
 async def process_booking(booking_id, telegram_id, booking_time, username, password, sport, player_nifs, test=False):
     """Process a single booking asynchronously."""
+    logging.info(f"Starting booking process - ID: {booking_id}, User: {username}, Time: {booking_time}")
     try:
         # Convert the synchronous make_booking function to run in a separate thread
         await asyncio.to_thread(
@@ -93,8 +104,9 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
         )
 
         if not test:
+            logging.info(f"Updating booking status to completed - ID: {booking_id}")
             # Update booking status in database
-            conn = sqlite3.connect("database.db")
+            conn = sqlite3.connect("bookings.db")
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -107,12 +119,14 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
             conn.commit()
             conn.close()
 
-        print(f"Booking completed for user {username} at {booking_time}")
+        logging.info(f"Booking completed successfully - ID: {booking_id}, User: {username}, Time: {booking_time}")
 
     except Exception as e:
-        # Update booking status to failed
+        logging.error(f"Booking failed - ID: {booking_id}, User: {username}, Error: {str(e)}")
         if not test:
-            conn = sqlite3.connect("database.db")
+            logging.info(f"Updating booking status to failed - ID: {booking_id}")
+            # Update booking status to failed
+            conn = sqlite3.connect("bookings.db")
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -149,8 +163,14 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
         chrome_options.add_argument("--headless=new")  # Use new headless mode
         chrome_options.add_argument("--window-size=1920,1080")
         chrome_options.add_argument("--start-maximized")
+    # Add these options for running in Linux VM
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
 
-    driver = webdriver.Chrome(options=chrome_options)
+    # Update the driver initialization
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=chrome_options)
 
     if record:
         # Set up video recording
@@ -161,6 +181,7 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
         out = cv2.VideoWriter(output_path, fourcc, 20.0, (1920, 1080))
 
     try:
+        logging.info(f"Starting make_booking - ID: {booking_id}, Sport: {sport}, Day: {day}, Hour: {hour}")
         wait = WebDriverWait(driver, 10)
 
         if record:
@@ -187,13 +208,15 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
 
         # Remove individual capture_frame() calls as we're now recording continuously
 
-        # Open website
+        logging.info("Navigating to RC Polo website")
         driver.get("https://rcpolo.com/")
 
+        logging.info("Handling cookie consent")
         # Click accept all cookies button
         cookie_button = wait.until(EC.element_to_be_clickable((By.ID, "onetrust-accept-btn-handler")))
         cookie_button.click()
 
+        logging.info("Logging in to RC Polo")
         # Click acceso socio
         login_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.acceso-socios")))
         login_button.click()
@@ -211,10 +234,12 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
         # Navigate to booking page
         driver.get("https://rcpolo.com/areasocios/es/ov")
 
+        logging.info(f"Selecting booking day: {day}")
         # Select day in dropdown
         day_dropdown = Select(wait.until(EC.presence_of_element_located((By.ID, "lstDate"))))
         day_dropdown.select_by_value("1" if day == "Mañana" else "0")
 
+        logging.info(f"Selecting booking hour: {hour}")
         # Select hour
         if sport == "padel":
             hour_element = wait.until(
@@ -323,38 +348,16 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
         elif sport == "tenis":
             return {"success": True, "players": [{"name": name1, "nif": player_nifs[0]}]}
 
+        logging.info(f"Booking process completed successfully - ID: {booking_id}")
+
     except Exception as e:
+        logging.error(f"Error during booking process - ID: {booking_id}, Error: {str(e)}")
         raise e
     finally:
         if record:
-            # Stop the recording thread
-            stop_recording = True
-            recording_thread.join()
-            out.release()
+            logging.info("Finalizing recording")
+        logging.info("Closing Chrome driver")
         driver.quit()
-
-
-async def start_scheduler():
-    """Sets up and runs the scheduler to execute bookings at 7am daily"""
-    scheduler = AsyncIOScheduler()
-
-    # Add the job - will run at 7am daily
-    scheduler.add_job(
-        handle_many_bookings,  # Note: no need for asyncio.run() here
-        CronTrigger(hour=7, minute=0),
-        id="daily_bookings",
-        name="Process daily bookings",
-        replace_existing=True,
-    )
-
-    scheduler.start()
-
-    # Keep the scheduler running
-    try:
-        while True:
-            await asyncio.sleep(1)  # Sleep for a second between checks
-    except (KeyboardInterrupt, SystemExit):
-        scheduler.shutdown()
 
 
 def check_credentials(credentials):

@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
     password TEXT,
     first_name TEXT,
     last_name TEXT,
-    subscription_status TEXT DEFAULT 'free',
+    subscription_status TEXT DEFAULT 'free' CHECK (subscription_status IN ('free', 'paid')),
     subscription_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS bookings (
     telegram_id INTEGER,
     booking_date DATE,
     booking_time TIME,
-    status TEXT DEFAULT 'pending',
+    status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'failed')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     executed_at TIMESTAMP,
     sport TEXT,
@@ -39,9 +39,3 @@ CREATE TABLE IF NOT EXISTS payments (
 -- Missing indexes for frequently queried columns
 CREATE INDEX IF NOT EXISTS idx_bookings_status_date ON bookings(status, booking_date);
 CREATE INDEX IF NOT EXISTS idx_bookings_telegram_id ON bookings(telegram_id);
-
--- Missing constraints
-ALTER TABLE bookings ADD CONSTRAINT check_status
-    CHECK (status IN ('pending', 'completed', 'failed'));
-ALTER TABLE users ADD CONSTRAINT check_subscription_status
-    CHECK (subscription_status IN ('free', 'paid'));

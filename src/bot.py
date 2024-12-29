@@ -22,6 +22,8 @@ from database import DatabaseManager
 # todo check credentials work right away
 # todo cehck that the booking would work (without actually booking, eg try dummy booking)
 # todo prompt if we want to book at a different time if the exact hour is not available
+# todo nif con letra minuscula
+# todo run what I have in the database in test mode and simulating a date
 # States for conversation handler
 (
     SELECTING_SPORT,
@@ -38,6 +40,7 @@ from database import DatabaseManager
 
 class TenisBookingBot:
     def __init__(self):
+        self.logger = logging.getLogger(__name__)
         self.db = DatabaseManager()
         # Load schedule data
         with open("src/schedule.json", "r") as f:
@@ -46,6 +49,7 @@ class TenisBookingBot:
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /start command"""
         user = update.effective_user
+        self.logger.info(f"New user started bot: {user.id} ({user.username})")
         self.db.add_user(user.id, user.username, user.first_name, user.last_name)
 
         welcome_text = (
@@ -61,6 +65,7 @@ class TenisBookingBot:
 
     async def book(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start the booking process by selecting sport"""
+        self.logger.info(f"User {update.effective_user.id} started booking process")
         keyboard = [
             [
                 InlineKeyboardButton("Tenis 🎾", callback_data="sport_tenis"),
@@ -75,9 +80,9 @@ class TenisBookingBot:
         """Handle sport selection and show date options"""
         query = update.callback_query
         await query.answer()
-
-        # Store selected sport in context
-        context.user_data["sport"] = query.data.split("_")[1]
+        sport = query.data.split("_")[1]
+        self.logger.info(f"User {update.effective_user.id} selected sport: {sport}")
+        context.user_data["sport"] = sport
 
         # Create date selection keyboard (same as before)
         dates = []
@@ -94,9 +99,9 @@ class TenisBookingBot:
         """Handle time selection and ask for booking preference"""
         query = update.callback_query
         await query.answer()
-
-        # Store selected time in context before moving to preference
-        context.user_data["time"] = query.data.split("_")[1]
+        selected_time = query.data.split("_")[1]
+        self.logger.info(f"User {update.effective_user.id} selected time: {selected_time}")
+        context.user_data["time"] = selected_time
 
         # Store selected preference in context
         context.user_data["preference"] = query.data.split("_")[1]
@@ -108,18 +113,20 @@ class TenisBookingBot:
     async def collect_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle ID input and ask for password"""
         user_id = update.message.text
-
         if not self.validate_nif(user_id):
+            self.logger.warning(f"User {update.effective_user.id} entered invalid NIF: {user_id}")
             await update.message.reply_text("El NIF introducido no es válido. Por favor, introduce un NIF válido:")
             return ENTERING_ID
-
+        
+        self.logger.info(f"User {update.effective_user.id} entered valid NIF")
         context.user_data["user_id"] = user_id
 
-        await update.message.reply_text("Por favor, introduce tu contraseña:")
+        await update.message.reply_text("Por favor, introduce tu contraseña de rcpolo.com (por defecto es nombre y año de nacimiento. ej: Pedro1982):")
         return ENTERING_PASSWORD
 
     async def collect_password(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle password input and ask for second player"""
+        self.logger.info(f"User {update.effective_user.id} entered password")
         context.user_data["password"] = update.message.text
 
         await update.message.reply_text("Por favor, introduce el NIF del segundo jugador:")
@@ -128,13 +135,12 @@ class TenisBookingBot:
     async def collect_player2(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle second player input and either finish or ask for more players"""
         player2_nif = update.message.text
-
         if not self.validate_nif(player2_nif):
-            await update.message.reply_text(
-                "El NIF del segundo jugador no es válido. Por favor, introduce un NIF válido:"
-            )
+            self.logger.warning(f"User {update.effective_user.id} entered invalid NIF for player 2: {player2_nif}")
+            await update.message.reply_text("El NIF del segundo jugador no es válido. Por favor, introduce un NIF válido:")
             return ENTERING_PLAYER2
 
+        self.logger.info(f"User {update.effective_user.id} entered valid NIF for player 2")
         context.user_data["player2_nif"] = player2_nif
 
         if context.user_data["sport"] == "padel":
@@ -146,13 +152,12 @@ class TenisBookingBot:
     async def collect_player3(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle third player input and ask for fourth player"""
         player3_nif = update.message.text
-
         if not self.validate_nif(player3_nif):
-            await update.message.reply_text(
-                "El NIF del tercer jugador no es válido. Por favor, introduce un NIF válido:"
-            )
+            self.logger.warning(f"User {update.effective_user.id} entered invalid NIF for player 3: {player3_nif}")
+            await update.message.reply_text("El NIF del tercer jugador no es válido. Por favor, introduce un NIF válido:")
             return ENTERING_PLAYER3
 
+        self.logger.info(f"User {update.effective_user.id} entered valid NIF for player 3")
         context.user_data["player3_nif"] = player3_nif
 
         await update.message.reply_text("Por favor, introduce el NIF del cuarto jugador:")
@@ -161,23 +166,22 @@ class TenisBookingBot:
     async def collect_player4(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle fourth player input and proceed to booking confirmation"""
         player4_nif = update.message.text
-
         if not self.validate_nif(player4_nif):
-            await update.message.reply_text(
-                "El NIF del cuarto jugador no es válido. Por favor, introduce un NIF válido:"
-            )
+            self.logger.warning(f"User {update.effective_user.id} entered invalid NIF for player 4: {player4_nif}")
+            await update.message.reply_text("El NIF del cuarto jugador no es válido. Por favor, introduce un NIF válido:")
             return ENTERING_PLAYER4
 
-        context.user_data["player4_nif"] = update.message.text
+        self.logger.info(f"User {update.effective_user.id} entered valid NIF for player 4")
+        context.user_data["player4_nif"] = player4_nif
         return await self.confirm_booking(update, context)
 
     async def select_time(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle date selection and show time options"""
         query = update.callback_query
         await query.answer()
-
-        # Store selected date in context
-        context.user_data["date"] = query.data.split("_")[1]
+        selected_date = query.data.split("_")[1]
+        self.logger.info(f"User {update.effective_user.id} selected date: {selected_date}")
+        context.user_data["date"] = selected_date
 
         # Get time slots for selected sport
         sport = context.user_data["sport"]
@@ -191,11 +195,29 @@ class TenisBookingBot:
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Cancel and end the conversation."""
+        self.logger.info(f"User {update.effective_user.id} cancelled the booking process")
         await update.message.reply_text("Booking process cancelled. You can start a new booking with /book")
         return ConversationHandler.END
 
     async def confirm_booking(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the final booking confirmation"""
+        user = update.effective_user
+        self.logger.info(
+            f"Processing booking confirmation for user {user.id}:\n"
+            f"Sport: {context.user_data['sport']}\n"
+            f"Date: {context.user_data['date']}\n"
+            f"Time: {context.user_data['time']}"
+        )
+        
+        # Ensure user exists in database and update their credentials
+        self.db.add_user(
+            telegram_id=user.id,
+            username=context.user_data['user_id'],  # NIF
+            password=context.user_data['password'],
+            first_name=user.first_name or "",
+            last_name=user.last_name or ""
+        )
+
         # Compile booking details
         booking_details = (
             f"Resumen de la Reserva:\n"
@@ -206,14 +228,28 @@ class TenisBookingBot:
             f"Jugador 2: {context.user_data['player2_nif']}"
         )
 
+        # Create list of player NIFs
+        player_nifs = [context.user_data['player2_nif']]
+        
         # Add padel-specific players if applicable
         if context.user_data["sport"] == "padel":
             booking_details += f"\nJugador 3: {context.user_data['player3_nif']}"
             booking_details += f"\nJugador 4: {context.user_data['player4_nif']}"
+            player_nifs.extend([context.user_data['player3_nif'], context.user_data['player4_nif']])
+
+        # Store booking in database
+        self.db.add_booking(
+            telegram_id=update.effective_user.id,
+            booking_date=context.user_data['date'],
+            booking_time=context.user_data['time'],
+            sport=context.user_data['sport'],
+            player_nifs=json.dumps(player_nifs)  # Convert list to JSON string for storage
+        )
 
         # Send confirmation message
         await update.message.reply_text(
-            f"{booking_details}\n\n¡Tu reserva ha sido confirmada! ✅"  # todo mention it is schedule for booking and the hour
+            f"{booking_details}\n\n¡Tu reserva ha sido programada! ✅\n"
+            f"Se intentará realizar la reserva a las {context.user_data['time']} del {context.user_data['date']}"
         )
 
         return ConversationHandler.END
@@ -223,6 +259,7 @@ class TenisBookingBot:
         Validates a Spanish NIF/NIE/CIF
         Returns True if valid, False otherwise
         """
+        self.logger.debug(f"Validating NIF: {nif}")
         # Remove any whitespace and convert to uppercase
         nif = nif.strip().upper()
 
@@ -248,6 +285,7 @@ class TenisBookingBot:
 
     def run(self):
         """Run the bot"""
+        self.logger.info("Initializing bot")
         application = Application.builder().token(CONFIG["bot"].TOKEN).build()
 
         # Update conversation handler
@@ -271,10 +309,18 @@ class TenisBookingBot:
         application.add_handler(conv_handler)
 
         # Start the bot
+        self.logger.info("Bot started successfully")
         application.run_polling()
 
 
 if __name__ == "__main__":
-    logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+    # Enhanced logging configuration
+    logging.basicConfig(
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        level=logging.INFO,
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    logger = logging.getLogger(__name__)
+    logger.info("Starting Tennis Booking Bot")
     bot = TenisBookingBot()
     bot.run()

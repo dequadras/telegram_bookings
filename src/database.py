@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 
 
 class DatabaseManager:
-    def __init__(self, db_path: str = "tenis_bookings.db"):
+    def __init__(self, db_path: str = "bookings.db"):
         self.db_path = db_path
         self.init_db()
 
@@ -24,23 +24,26 @@ class DatabaseManager:
             logging.error(f"Database initialization failed: {e}")
             raise
 
-    def add_user(self, telegram_id: int, username: str, first_name: str, last_name: str) -> bool:
-        """Add a new user to the database"""
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT OR IGNORE INTO users (telegram_id, username, first_name, last_name)
-                    VALUES (?, ?, ?, ?)
-                """,
-                    (telegram_id, username, first_name, last_name),
-                )
-                conn.commit()
-                return True
-        except Exception as e:
-            logging.error(f"Failed to add user: {e}")
-            return False
+    def add_user(self, telegram_id: int, username: str, password: str = None, first_name: str = "", last_name: str = "") -> None:
+        """
+        Add or update a user in the database
+        """
+        query = """
+            INSERT INTO users (telegram_id, username, password, first_name, last_name)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET
+                username = COALESCE(NULLIF(?, ''), username),
+                password = COALESCE(NULLIF(?, ''), password),
+                first_name = COALESCE(NULLIF(?, ''), first_name),
+                last_name = COALESCE(NULLIF(?, ''), last_name)
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (
+                telegram_id, username, password, first_name, last_name,
+                username, password, first_name, last_name  # Values for the UPDATE clause
+            ))
+            conn.commit()
 
     def create_booking(self, telegram_id: int, booking_date: str, booking_time: str) -> Optional[int]:
         """Create a new booking request"""
@@ -84,3 +87,23 @@ class DatabaseManager:
         except Exception as e:
             logging.error(f"Failed to get pending bookings: {e}")
             return []
+
+    def add_booking(self, telegram_id: int, booking_date: str, booking_time: str, sport: str, player_nifs: str) -> None:
+        """
+        Add a new booking to the database
+        
+        Args:
+            telegram_id (int): Telegram user ID
+            booking_date (str): Date of booking in YYYY-MM-DD format
+            booking_time (str): Time of booking in HH:MM format
+            sport (str): Sport type (tenis/padel)
+            player_nifs (str): JSON string containing list of player NIFs
+        """
+        query = """
+            INSERT INTO bookings (telegram_id, booking_date, booking_time, sport, player_nifs, status)
+            VALUES (?, ?, ?, ?, ?, 'pending')
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (telegram_id, booking_date, booking_time, sport, player_nifs))
+            conn.commit()
