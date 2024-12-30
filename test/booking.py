@@ -1,4 +1,3 @@
-import asyncio
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -7,8 +6,18 @@ import pytest
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+from src.booking import check_credentials, handle_many_bookings
 
-from src.booking import handle_many_bookings, process_booking
+
+def test_check_credentials_valid():
+    credentials = {"username": "4615293E", "password": "Luis1992"}
+    assert check_credentials(credentials) is True
+
+
+def test_check_credentials_invalid():
+    credentials = {"username": "4615293E", "password": "incorrect"}
+    assert check_credentials(credentials) is False
 
 
 @pytest.fixture

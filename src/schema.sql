@@ -5,8 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
     password TEXT,
     first_name TEXT,
     last_name TEXT,
-    subscription_status TEXT DEFAULT 'free' CHECK (subscription_status IN ('free', 'paid')),
-    subscription_id TEXT,
+    booking_credits INTEGER DEFAULT 5,  -- Start with 5 free bookings
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

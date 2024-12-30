@@ -21,6 +21,8 @@ sudo systemctl status polo-bookings.timer
 
 # view logs
 sudo journalctl -u polo-bookings.service -f
+sudo journalctl -u telegram_bookings_bot.service -f
+
 ```
 
 /etc/systemd/system/telegram_bookings_bot.service
@@ -60,6 +62,20 @@ StandardError=append:/var/log/polo-bookings.log
 
 [Install]
 WantedBy=multi-user.target
+```
+
+/etc/systemd/system/polo-bookings.timer
+````
+[Unit]
+Description=Run RC Polo bookings daily at 7am Madrid time
+
+[Timer]
+OnCalendar=*-*-* 07:00:00 Europe/Madrid
+Persistent=true
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
 ```
 
 Restart

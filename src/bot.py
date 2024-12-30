@@ -17,8 +17,12 @@ from telegram.ext import (
 from config import CONFIG
 from database import DatabaseManager
 
+# todo see if there is a way to debug telegram (eg have different users)
+# todo on booking output, show credits left
+# todo clear how to start the bot
 # todo NIF and password should only be asked once
-# todo players should be saved (e.g. next time have the option to click on a person's name instead of typing nif), maybe prompt for name or maybe get it from the web , show options by most used
+# todo players should be saved (e.g. next time have the option to click on a person's name instead of typing nif)
+# , maybe prompt for name or maybe get it from the web , show options by most used
 # todo check credentials work right away
 # todo cehck that the booking would work (without actually booking, eg try dummy booking)
 # todo prompt if we want to book at a different time if the exact hour is not available
@@ -117,11 +121,14 @@ class TenisBookingBot:
             self.logger.warning(f"User {update.effective_user.id} entered invalid NIF: {user_id}")
             await update.message.reply_text("El NIF introducido no es válido. Por favor, introduce un NIF válido:")
             return ENTERING_ID
-        
+
         self.logger.info(f"User {update.effective_user.id} entered valid NIF")
         context.user_data["user_id"] = user_id
 
-        await update.message.reply_text("Por favor, introduce tu contraseña de rcpolo.com (por defecto es nombre y año de nacimiento. ej: Pedro1982):")
+        await update.message.reply_text(
+            "Por favor, introduce tu contraseña de rcpolo.com (por defecto es nombre y año de "
+            "nacimiento. ej: Pedro1982):"
+        )
         return ENTERING_PASSWORD
 
     async def collect_password(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -137,7 +144,9 @@ class TenisBookingBot:
         player2_nif = update.message.text
         if not self.validate_nif(player2_nif):
             self.logger.warning(f"User {update.effective_user.id} entered invalid NIF for player 2: {player2_nif}")
-            await update.message.reply_text("El NIF del segundo jugador no es válido. Por favor, introduce un NIF válido:")
+            await update.message.reply_text(
+                "El NIF del segundo jugador no es válido. Por favor, introduce un NIF válido:"
+            )
             return ENTERING_PLAYER2
 
         self.logger.info(f"User {update.effective_user.id} entered valid NIF for player 2")
@@ -154,7 +163,9 @@ class TenisBookingBot:
         player3_nif = update.message.text
         if not self.validate_nif(player3_nif):
             self.logger.warning(f"User {update.effective_user.id} entered invalid NIF for player 3: {player3_nif}")
-            await update.message.reply_text("El NIF del tercer jugador no es válido. Por favor, introduce un NIF válido:")
+            await update.message.reply_text(
+                "El NIF del tercer jugador no es válido. Por favor, introduce un NIF válido:"
+            )
             return ENTERING_PLAYER3
 
         self.logger.info(f"User {update.effective_user.id} entered valid NIF for player 3")
@@ -168,7 +179,9 @@ class TenisBookingBot:
         player4_nif = update.message.text
         if not self.validate_nif(player4_nif):
             self.logger.warning(f"User {update.effective_user.id} entered invalid NIF for player 4: {player4_nif}")
-            await update.message.reply_text("El NIF del cuarto jugador no es válido. Por favor, introduce un NIF válido:")
+            await update.message.reply_text(
+                "El NIF del cuarto jugador no es válido. Por favor, introduce un NIF válido:"
+            )
             return ENTERING_PLAYER4
 
         self.logger.info(f"User {update.effective_user.id} entered valid NIF for player 4")
@@ -202,20 +215,36 @@ class TenisBookingBot:
     async def confirm_booking(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the final booking confirmation"""
         user = update.effective_user
+
+        # Check if user has available credits
+        credits = self.db.get_user_credits(user.id)
+        if credits <= 0:
+            await update.message.reply_text(
+                "❌ No tienes reservas disponibles.\n\n" "Puedes conseguir más reservas usando /buy"
+            )
+            return ConversationHandler.END
+
+        # Deduct one credit
+        if not self.db.deduct_booking_credit(user.id):
+            await update.message.reply_text(
+                "❌ Error al procesar la reserva.\n" "Por favor, intenta de nuevo o contacta con soporte."
+            )
+            return ConversationHandler.END
+
         self.logger.info(
             f"Processing booking confirmation for user {user.id}:\n"
             f"Sport: {context.user_data['sport']}\n"
             f"Date: {context.user_data['date']}\n"
             f"Time: {context.user_data['time']}"
         )
-        
+
         # Ensure user exists in database and update their credentials
         self.db.add_user(
             telegram_id=user.id,
-            username=context.user_data['user_id'],  # NIF
-            password=context.user_data['password'],
+            username=context.user_data["user_id"],  # NIF
+            password=context.user_data["password"],
             first_name=user.first_name or "",
-            last_name=user.last_name or ""
+            last_name=user.last_name or "",
         )
 
         # Compile booking details
@@ -229,27 +258,27 @@ class TenisBookingBot:
         )
 
         # Create list of player NIFs
-        player_nifs = [context.user_data['player2_nif']]
-        
+        player_nifs = [context.user_data["player2_nif"]]
+
         # Add padel-specific players if applicable
         if context.user_data["sport"] == "padel":
             booking_details += f"\nJugador 3: {context.user_data['player3_nif']}"
             booking_details += f"\nJugador 4: {context.user_data['player4_nif']}"
-            player_nifs.extend([context.user_data['player3_nif'], context.user_data['player4_nif']])
+            player_nifs.extend([context.user_data["player3_nif"], context.user_data["player4_nif"]])
 
         # Store booking in database
         self.db.add_booking(
             telegram_id=update.effective_user.id,
-            booking_date=context.user_data['date'],
-            booking_time=context.user_data['time'],
-            sport=context.user_data['sport'],
-            player_nifs=json.dumps(player_nifs)  # Convert list to JSON string for storage
+            booking_date=context.user_data["date"],
+            booking_time=context.user_data["time"],
+            sport=context.user_data["sport"],
+            player_nifs=json.dumps(player_nifs),  # Convert list to JSON string for storage
         )
 
         # Send confirmation message
         await update.message.reply_text(
             f"{booking_details}\n\n¡Tu reserva ha sido programada! ✅\n"
-            f"Se intentará realizar la reserva a las {context.user_data['time']} del {context.user_data['date']}"
+            f"Se tramitará la reserva en rcpolo.com el día anterior a las 7am"
         )
 
         return ConversationHandler.END
@@ -283,10 +312,61 @@ class TenisBookingBot:
         # Compare calculated letter with provided letter
         return nif[-1] == check_letter
 
+    async def info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show user's available booking credits"""
+        user_id = update.effective_user.id
+        credits = self.db.get_user_credits(user_id)
+
+        await update.message.reply_text(
+            f"🎾 Información de tu cuenta:\n\n"
+            f"Reservas disponibles: {credits}\n\n"
+            "Puedes conseguir 10 reservas adicionales por 10€ usando /buy"
+        )
+
+    async def buy_credits(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle the purchase of additional booking credits"""
+        keyboard = [[InlineKeyboardButton("Comprar 10 reservas (10€)", callback_data="buy_credits")]]
+
+        await update.message.reply_text(
+            "🎯 Comprar reservas adicionales:\n\n"
+            "• 10 reservas por 10€\n"
+            "• Pago seguro con Stripe\n"
+            "• Las reservas no caducan",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    async def handle_buy_credits(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Process the credit purchase"""
+        query = update.callback_query
+        await query.answer()
+
+        # Create Stripe payment link (implementation depends on your Stripe setup)
+        payment_link = "https://your-stripe-payment-link"
+
+        await query.edit_message_text(
+            "Para completar tu compra, haz click en el siguiente enlace:\n\n"
+            f"{payment_link}\n\n"
+            "Una vez completado el pago, tus reservas estarán disponibles inmediatamente."
+        )
+
     def run(self):
         """Run the bot"""
         self.logger.info("Initializing bot")
         application = Application.builder().token(CONFIG["bot"].TOKEN).build()
+
+        # Set up bot commands that appear in the menu
+        commands = [
+            ("start", "Iniciar el bot"),
+            ("book", "Reservar una pista"),
+            ("mybookings", "Ver mis reservas"),
+            ("subscribe", "Obtener reservas ilimitadas"),
+            ("help", "Obtener ayuda"),
+        ]
+
+        # Set up commands synchronously at startup
+        application.bot.set_my_commands(commands)
+        application.bot.set_my_description("¡Hola! Soy el bot de reservas del RCPolo. Pulsa 'Iniciar' para empezar. 🎾")
+        application.bot.set_my_short_description("Bot de reservas de pistas del RCPolo")
 
         # Update conversation handler
         conv_handler = ConversationHandler(
@@ -305,10 +385,10 @@ class TenisBookingBot:
             fallbacks=[CommandHandler("cancel", self.cancel)],
         )
 
+        # Add handlers
         application.add_handler(CommandHandler("start", self.start))
         application.add_handler(conv_handler)
 
-        # Start the bot
         self.logger.info("Bot started successfully")
         application.run_polling()
 
@@ -316,10 +396,11 @@ class TenisBookingBot:
 if __name__ == "__main__":
     # Enhanced logging configuration
     logging.basicConfig(
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        level=logging.INFO,
-        datefmt="%Y-%m-%d %H:%M:%S"
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S"
     )
+    # Set httpx logger to WARNING level to reduce HTTP request logs
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
     logger = logging.getLogger(__name__)
     logger.info("Starting Tennis Booking Bot")
     bot = TenisBookingBot()
