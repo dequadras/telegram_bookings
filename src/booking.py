@@ -20,17 +20,17 @@ from selenium.webdriver.support.ui import Select, WebDriverWait
 from telegram import Bot
 
 from config import CONFIG
+from database import DatabaseManager
 
-# todo not allow access with num socio
 # todo check that I can book in the most wanted spots (eg do my own telegram bookings)
-# todo retry booking if it fails
-# todo payments should be handled on a token basis (not subscription)
-# ability to cancel booking
+# todo (later)retry booking if it fails
 
 # Add at the top of the file, after imports
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S")
 
 CHROMEDRIVER_PATH = "/root/.wdm/drivers/chromedriver/linux64/131.0.6778.204/chromedriver-linux64/chromedriver"
+
+DB = DatabaseManager()
 
 
 # Add this connection manager function
@@ -103,6 +103,7 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
     """Process a single booking asynchronously."""
     logging.info(f"Starting booking process - ID: {booking_id}, User: {username}, Time: {booking_time}")
     bot = Bot(token=CONFIG["bot"].TOKEN)
+    admin_id = 249843154
 
     try:
         # Convert the synchronous make_booking function to run in a separate thread
@@ -150,12 +151,23 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
         error_message = (
             f"❌ Error al procesar tu reserva de {sport} para las {booking_time}\n\n"
             f"Error: {str(e)}\n\n"
-            "Por favor, intenta de nuevo más tarde o contacta con soporte."
+            "Por favor, intenta de nuevo más tarde."
+        )
+
+        # Send detailed error notification to admin
+        admin_error_message = (
+            f"🚨 *Booking Failed*\n\n"
+            f"Booking ID: `{booking_id}`\n"
+            f"User: `{username}`\n"
+            f"Sport: {sport}\n"
+            f"Time: {booking_time}\n"
+            f"Error: `{str(e)}`"
         )
 
         logging.error(f"Booking failed - ID: {booking_id}, User: {username}, Error: {str(e)}", exc_info=True)
         if not test:
             await bot.send_message(chat_id=telegram_id, text=error_message)
+            await bot.send_message(chat_id=admin_id, text=admin_error_message, parse_mode="Markdown")
             logging.info(f"Updating booking status to failed - ID: {booking_id}")
             with get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -246,8 +258,10 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
                         img = cv2.resize(img, (1920, 1080))
                         out.write(img)
                         time.sleep(0.05)  # 20 FPS
-                    except:
-                        pass  # Ignore any screenshot errors
+                    except Exception as e:
+                        # Log the error but continue recording
+                        logging.debug(f"Screenshot capture failed: {str(e)}")
+                        continue
 
             # Start recording thread
             import threading
@@ -373,6 +387,10 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
             name3_field = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "txtName3")))
             name3 = name3_field.get_attribute("value")
             print(f"Third player name: {name3}")
+
+            # After getting each player's name
+            for nif, name in [(player_nifs[0], name1), (player_nifs[1], name2), (player_nifs[2], name3)]:
+                DB.add_player(nif=nif, name=name)
         elif sport == "tenis":
             nif1_field = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "txtNIF")))
             nif1_field.click()
@@ -383,6 +401,9 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
             name1_field = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "txtName")))
             name1 = name1_field.get_attribute("value")
             print(f"First player name: {name1}")
+
+            # After getting player's name
+            DB.add_player(nif=player_nifs[0], name=name1)
         # Accept conditions
         conditions_checkbox = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "chkAccept")))
         conditions_checkbox.click()

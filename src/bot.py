@@ -3,7 +3,14 @@ import logging
 import re
 from datetime import datetime, timedelta
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+    Update,
+)
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -17,18 +24,15 @@ from telegram.ext import (
 from config import CONFIG
 from database import DatabaseManager
 
-# todo see if there is a way to debug telegram (eg have different users)
-# todo on booking output, show credits left
-# todo clear how to start the bot
-# todo NIF and password should only be asked once
 # todo players should be saved (e.g. next time have the option to click on a person's name instead of typing nif)
-# , maybe prompt for name or maybe get it from the web , show options by most used
 # todo check credentials work right away
 # todo cehck that the booking would work (without actually booking, eg try dummy booking)
 # todo prompt if we want to book at a different time if the exact hour is not available
-# todo nif con letra minuscula
-# todo run what I have in the database in test mode and simulating a date
 # States for conversation handler
+# add a command to reenter password and username
+# add buy, remove subscribe
+# execute run_bookings twixe, for free and premium
+# todo code that checks at 7am in the morning how many courts are available, every 20 seconds
 (
     SELECTING_SPORT,
     SELECTING_DATE,
@@ -39,7 +43,8 @@ from database import DatabaseManager
     ENTERING_PLAYER2,
     ENTERING_PLAYER3,
     ENTERING_PLAYER4,
-) = range(9)
+    SELECTING_BOOKING_TYPE,
+) = range(10)
 
 
 class TenisBookingBot:
@@ -49,12 +54,26 @@ class TenisBookingBot:
         # Load schedule data
         with open("src/schedule.json", "r") as f:
             self.schedule = json.load(f)
+        self.admin_id = 249843154  # Add admin telegram ID
+
+    async def notify_admin(self, message: str):
+        """Send notification to admin"""
+        try:
+            await self.application.bot.send_message(chat_id=self.admin_id, text=message, parse_mode="Markdown")
+        except Exception as e:
+            self.logger.error(f"Failed to send admin notification: {e}")
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /start command"""
         user = update.effective_user
         self.logger.info(f"New user started bot: {user.id} ({user.username})")
-        self.db.add_user(user.id, user.username, user.first_name, user.last_name)
+        self.db.add_user(
+            telegram_id=user.id,
+            username=user.username,
+            password=None,
+            first_name=user.first_name,
+            last_name=user.last_name,
+        )
 
         welcome_text = (
             f"¡Bienvenido/a {user.first_name}! 🎾\n\n"
@@ -110,13 +129,22 @@ class TenisBookingBot:
         # Store selected preference in context
         context.user_data["preference"] = query.data.split("_")[1]
 
-        # Move to ID collection
-        await query.edit_message_text("Por favor, introduce tu ID (NIF o número de socio del RCPolo):")
+        # Check if user already has credentials stored
+        user_data = self.db.get_user_credentials(update.effective_user.id)
+        if user_data and user_data["username"] and user_data["password"]:
+            # If credentials exist, store them and skip to player2
+            context.user_data["user_id"] = user_data["username"]
+            context.user_data["password"] = user_data["password"]
+            await query.edit_message_text("Por favor, selecciona o introduce el NIF del segundo jugador:")
+            return ENTERING_PLAYER2
+
+        # If no credentials, ask for them
+        await query.edit_message_text("Por favor, introduce tu usuario (NIF):")
         return ENTERING_ID
 
     async def collect_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle ID input and ask for password"""
-        user_id = update.message.text
+        user_id = update.message.text.upper()
         if not self.validate_nif(user_id):
             self.logger.warning(f"User {update.effective_user.id} entered invalid NIF: {user_id}")
             await update.message.reply_text("El NIF introducido no es válido. Por favor, introduce un NIF válido:")
@@ -140,53 +168,16 @@ class TenisBookingBot:
         return ENTERING_PLAYER2
 
     async def collect_player2(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle second player input and either finish or ask for more players"""
-        player2_nif = update.message.text
-        if not self.validate_nif(player2_nif):
-            self.logger.warning(f"User {update.effective_user.id} entered invalid NIF for player 2: {player2_nif}")
-            await update.message.reply_text(
-                "El NIF del segundo jugador no es válido. Por favor, introduce un NIF válido:"
-            )
-            return ENTERING_PLAYER2
-
-        self.logger.info(f"User {update.effective_user.id} entered valid NIF for player 2")
-        context.user_data["player2_nif"] = player2_nif
-
-        if context.user_data["sport"] == "padel":
-            await update.message.reply_text("Por favor, introduce el NIF del tercer jugador:")
-            return ENTERING_PLAYER3
-        else:
-            return await self.confirm_booking(update, context)
+        """Handle second player selection"""
+        return await self.handle_player_input(update, context, 2)
 
     async def collect_player3(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle third player input and ask for fourth player"""
-        player3_nif = update.message.text
-        if not self.validate_nif(player3_nif):
-            self.logger.warning(f"User {update.effective_user.id} entered invalid NIF for player 3: {player3_nif}")
-            await update.message.reply_text(
-                "El NIF del tercer jugador no es válido. Por favor, introduce un NIF válido:"
-            )
-            return ENTERING_PLAYER3
-
-        self.logger.info(f"User {update.effective_user.id} entered valid NIF for player 3")
-        context.user_data["player3_nif"] = player3_nif
-
-        await update.message.reply_text("Por favor, introduce el NIF del cuarto jugador:")
-        return ENTERING_PLAYER4
+        """Handle third player selection"""
+        return await self.handle_player_input(update, context, 3)
 
     async def collect_player4(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle fourth player input and proceed to booking confirmation"""
-        player4_nif = update.message.text
-        if not self.validate_nif(player4_nif):
-            self.logger.warning(f"User {update.effective_user.id} entered invalid NIF for player 4: {player4_nif}")
-            await update.message.reply_text(
-                "El NIF del cuarto jugador no es válido. Por favor, introduce un NIF válido:"
-            )
-            return ENTERING_PLAYER4
-
-        self.logger.info(f"User {update.effective_user.id} entered valid NIF for player 4")
-        context.user_data["player4_nif"] = player4_nif
-        return await self.confirm_booking(update, context)
+        """Handle fourth player selection"""
+        return await self.handle_player_input(update, context, 4)
 
     async def select_time(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle date selection and show time options"""
@@ -212,24 +203,29 @@ class TenisBookingBot:
         await update.message.reply_text("Booking process cancelled. You can start a new booking with /book")
         return ConversationHandler.END
 
-    async def confirm_booking(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def confirm_booking(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query=None):
         """Handle the final booking confirmation"""
         user = update.effective_user
 
-        # Check if user has available credits
-        credits = self.db.get_user_credits(user.id)
-        if credits <= 0:
-            await update.message.reply_text(
-                "❌ No tienes reservas disponibles.\n\n" "Puedes conseguir más reservas usando /buy"
-            )
-            return ConversationHandler.END
+        # Check if user has available credits (only for premium bookings)
+        if context.user_data.get("is_premium", False):
+            credits = self.db.get_user_credits(user.id)
+            if credits <= 0:
+                message = "❌ No tienes reservas disponibles.\n\n" "Puedes conseguir más reservas usando /buy"
+                if query:
+                    await query.edit_message_text(message)
+                else:
+                    await update.message.reply_text(message)
+                return ConversationHandler.END
 
-        # Deduct one credit
-        if not self.db.deduct_booking_credit(user.id):
-            await update.message.reply_text(
-                "❌ Error al procesar la reserva.\n" "Por favor, intenta de nuevo o contacta con soporte."
-            )
-            return ConversationHandler.END
+            # Deduct one credit only for premium bookings
+            if not self.db.deduct_booking_credit(user.id):
+                message = "❌ Error al procesar la reserva.\n" "Por favor, intenta de nuevo o contacta con soporte."
+                if query:
+                    await query.edit_message_text(message)
+                else:
+                    await update.message.reply_text(message)
+                return ConversationHandler.END
 
         self.logger.info(
             f"Processing booking confirmation for user {user.id}:\n"
@@ -268,20 +264,104 @@ class TenisBookingBot:
 
         # Store booking in database
         self.db.add_booking(
-            telegram_id=update.effective_user.id,
+            telegram_id=user.id,
             booking_date=context.user_data["date"],
             booking_time=context.user_data["time"],
             sport=context.user_data["sport"],
-            player_nifs=json.dumps(player_nifs),  # Convert list to JSON string for storage
+            player_nifs=json.dumps(player_nifs),
+            is_premium=context.user_data["is_premium"],
         )
 
-        # Send confirmation message
-        await update.message.reply_text(
-            f"{booking_details}\n\n¡Tu reserva ha sido programada! ✅\n"
-            f"Se tramitará la reserva en rcpolo.com el día anterior a las 7am"
+        # Send confirmation message with remaining credits
+        message = (
+            f"{booking_details}\n\n"
+            f"¡Tu reserva ha sido programada! ✅\n"
+            f"Se tramitará la reserva en rcpolo.com el día anterior a las "
+            f"{' 7:00' if context.user_data['is_premium'] else ' 8:00'}am"
         )
+
+        # Only add remaining credits info for premium bookings
+        if context.user_data.get("is_premium", False):
+            remaining_credits = self.db.get_user_credits(user.id)
+            message += f"\n\nTe quedan {remaining_credits} reservas disponibles."
+
+        if query:
+            await query.edit_message_text(message)
+        else:
+            await update.message.reply_text(message)
+
+        # After successful booking, notify admin
+        admin_message = (
+            "🎾 *Nueva Reserva externa*\n\n"
+            f"Usuario: {user.first_name} (@{user.username})\n"
+            f"Deporte: {context.user_data['sport'].title()}\n"
+            f"Fecha: {context.user_data['date']}\n"
+            f"Hora: {context.user_data['time']}"
+        )
+        await self.notify_admin(admin_message)
 
         return ConversationHandler.END
+
+    async def prompt_player_selection(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE, player_number: int
+    ) -> int:
+        """Handle player selection with option to choose from history or enter new NIF"""
+        user_id = update.effective_user.id
+
+        # Get recent players for this user
+        recent_players = self.db.get_frequent_partners(
+            user_id, limit=5
+        )  # You'll need to implement this in DatabaseManager
+
+        keyboard = []
+        # Add recent players if any exist
+        if recent_players:
+            for nif, name in recent_players:
+                # Display name if available, otherwise just NIF
+                display_text = f"{name} ({nif})" if name else nif
+                keyboard.append([KeyboardButton(display_text)])
+
+        # Add option to enter new player
+        keyboard.append([KeyboardButton("Introducir nuevo NIF")])
+
+        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+
+        await update.message.reply_text(
+            f"Por favor, selecciona el jugador {player_number} o introduce un nuevo NIF:", reply_markup=reply_markup
+        )
+
+        # Return the appropriate state based on player number
+        return {2: ENTERING_PLAYER2, 3: ENTERING_PLAYER3, 4: ENTERING_PLAYER4}[player_number]
+
+    async def handle_player_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE, player_number: int):
+        """Handle player selection or NIF input"""
+        text = update.message.text
+
+        # Check if this is a selection from recent players
+        if "(" in text and ")" in text:
+            # Extract NIF from format "Name (NIF)"
+            nif = text[text.find("(") + 1 : text.find(")")].strip()
+        else:
+            # Treat as new NIF input
+            nif = text.upper()
+
+        # Validate NIF
+        if not self.validate_nif(nif):
+            await update.message.reply_text(
+                f"El NIF del jugador {player_number} no es válido. Por favor, introduce un NIF válido:",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return {2: ENTERING_PLAYER2, 3: ENTERING_PLAYER3, 4: ENTERING_PLAYER4}[player_number]
+
+        # Store the NIF in context
+        context.user_data[f"player{player_number}_nif"] = nif
+
+        # Determine next step based on sport and player number
+        if player_number < 4 and context.user_data["sport"] == "padel":
+            return await self.prompt_player_selection(update, context, player_number + 1)
+        else:
+            # Instead of going to confirm_booking, go to select_booking_type
+            return await self.select_booking_type(update, context)
 
     def validate_nif(self, nif: str) -> bool:
         """
@@ -349,10 +429,155 @@ class TenisBookingBot:
             "Una vez completado el pago, tus reservas estarán disponibles inmediatamente."
         )
 
+    async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle the /help command"""
+        help_text = (
+            "🤖 *¿Qué puedo hacer?*\n\n"
+            "Te ayudo a reservar pistas de tenis y pádel en el RCPolo. Estos son mis comandos:\n\n"
+            "🎾 */book* - Reservar una pista\n"
+            "📅 */mybookings* - Ver tus reservas actuales\n"
+            "⭐️ */subscribe* - Obtener reservas ilimitadas\n"
+            "❓ */help* - Ver este mensaje de ayuda\n\n"
+            "Para empezar una reserva, simplemente usa el comando /book"
+        )
+
+        await update.message.reply_text(help_text, parse_mode="Markdown")
+
+    async def mybookings(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show user's current bookings"""
+        user_id = update.effective_user.id
+        self.logger.info(f"User {user_id} checking their bookings")
+        bookings = self.db.get_user_bookings(user_id)
+
+        if not bookings:
+            await update.message.reply_text("No tienes reservas pendientes. Usa /book para hacer una nueva reserva.")
+            return
+
+        message = "📅 *Tus Reservas:*\n\n"
+        keyboard = []
+
+        for booking in bookings:
+            # Convert player_nifs from JSON string to list
+            players = json.loads(booking["player_nifs"])
+
+            # Format the booking details
+            message += (
+                f"*{booking['sport'].title()}* - {booking['booking_date']} a las {booking['booking_time']}\n"
+                f"Estado: {self._format_status(booking['status'])}\n"
+                f"Jugadores: Tú + {len(players)} más\n"
+                f"──────────────\n"
+            )
+
+            # Add cancel button if booking is pending
+            if booking["status"] == "pending":
+                keyboard.append(
+                    [
+                        InlineKeyboardButton(
+                            f"❌ Cancelar {booking['sport']} {booking['booking_date']} {booking['booking_time']}",
+                            callback_data=f"cancel_{booking['id']}",
+                        )
+                    ]
+                )
+
+        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+        await update.message.reply_text(message, parse_mode="Markdown", reply_markup=reply_markup)
+
+    def _format_status(self, status: str) -> str:
+        """Format booking status for display"""
+        status_emojis = {
+            "pending": "⏳ Pendiente",
+            "completed": "✅ Confirmada",
+            "failed": "❌ Fallida",
+            "cancelled": "🚫 Cancelada",
+        }
+        return status_emojis.get(status, status)
+
+    async def cancel_booking(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle booking cancellation"""
+        query = update.callback_query
+        await query.answer()
+
+        if query.data.startswith("confirm_cancel_"):
+            # User confirmed cancellation
+            booking_id = int(query.data.split("_")[2])
+            user_id = update.effective_user.id
+
+            # Update booking status in database
+            if self.db.cancel_booking(booking_id, user_id):
+                # Refund the booking credit
+                self.db.add_booking_credit(user_id, 1)
+                await query.edit_message_text(
+                    "✅ Reserva cancelada correctamente.\n\nSe ha devuelto el crédito a tu cuenta.",
+                    parse_mode="Markdown",
+                )
+            else:
+                await query.edit_message_text(
+                    "❌ No se pudo cancelar la reserva. Por favor, inténtalo de nuevo o contacta con soporte.",
+                    parse_mode="Markdown",
+                )
+        else:
+            # Show confirmation dialog
+            booking_id = int(query.data.split("_")[1])
+            keyboard = [
+                [
+                    InlineKeyboardButton("Sí, cancelar", callback_data=f"confirm_cancel_{booking_id}"),
+                    InlineKeyboardButton("No, mantener", callback_data="keep_booking"),
+                ]
+            ]
+            await query.edit_message_text(
+                "¿Estás seguro de que quieres cancelar esta reserva?", reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+
+    async def keep_booking(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle when user decides not to cancel the booking"""
+        query = update.callback_query
+        await query.answer()
+        await query.edit_message_text("✅ Tu reserva se ha mantenido sin cambios.")
+
+    async def select_booking_type(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Ask user to select between premium and free booking"""
+        keyboard = [
+            [
+                InlineKeyboardButton("Premium (7:00) - 1 crédito", callback_data="booking_premium"),
+                InlineKeyboardButton("Gratuita (8:00)", callback_data="booking_free"),
+            ]
+        ]
+
+        await update.message.reply_text(
+            "Por favor, selecciona el tipo de reserva:\n\n"
+            "🌟 *Premium*: Se intenta reservar a las 7:00 (coste: 1 crédito)\n"
+            "🆓 *Gratuita*: Se intenta reservar a las 8:00 (sin coste, menor probabilidad)",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown",
+        )
+        return SELECTING_BOOKING_TYPE
+
+    async def process_booking_type(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle booking type selection"""
+        query = update.callback_query
+        await query.answer()
+
+        is_premium = query.data == "booking_premium"
+        context.user_data["is_premium"] = is_premium
+
+        if is_premium:
+            # Check credits only for premium bookings
+            credits = self.db.get_user_credits(update.effective_user.id)
+            if credits <= 0:
+                await query.edit_message_text(
+                    "❌ No tienes créditos disponibles para reservas premium.\n\n"
+                    "Puedes conseguir más créditos usando /buy o hacer una reserva gratuita."
+                )
+                return ConversationHandler.END
+
+        # Call confirm_booking with the query object
+        return await self.confirm_booking(update, context, query)
+
     def run(self):
         """Run the bot"""
         self.logger.info("Initializing bot")
         application = Application.builder().token(CONFIG["bot"].TOKEN).build()
+        self.application = application  # Store application instance for notifications
 
         # Set up bot commands that appear in the menu
         commands = [
@@ -363,10 +588,13 @@ class TenisBookingBot:
             ("help", "Obtener ayuda"),
         ]
 
-        # Set up commands synchronously at startup
+        # Set up commands and bot metadata synchronously at startup
         application.bot.set_my_commands(commands)
         application.bot.set_my_description("¡Hola! Soy el bot de reservas del RCPolo. Pulsa 'Iniciar' para empezar. 🎾")
         application.bot.set_my_short_description("Bot de reservas de pistas del RCPolo")
+
+        # Change from default menu button (3 bars) to text "Menu"
+        application.bot.set_chat_menu_button(menu_button={"type": "commands", "text": "Menu"})
 
         # Update conversation handler
         conv_handler = ConversationHandler(
@@ -381,13 +609,18 @@ class TenisBookingBot:
                 ENTERING_PLAYER2: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_player2)],
                 ENTERING_PLAYER3: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_player3)],
                 ENTERING_PLAYER4: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_player4)],
+                SELECTING_BOOKING_TYPE: [CallbackQueryHandler(self.process_booking_type)],
             },
             fallbacks=[CommandHandler("cancel", self.cancel)],
         )
 
         # Add handlers
         application.add_handler(CommandHandler("start", self.start))
+        application.add_handler(CommandHandler("help", self.help))
         application.add_handler(conv_handler)
+        application.add_handler(CommandHandler("mybookings", self.mybookings))
+        application.add_handler(CallbackQueryHandler(self.cancel_booking, pattern="^(cancel_|confirm_cancel_)"))
+        application.add_handler(CallbackQueryHandler(self.keep_booking, pattern="^keep_booking"))
 
         self.logger.info("Bot started successfully")
         application.run_polling()

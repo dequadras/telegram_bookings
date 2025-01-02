@@ -75,8 +75,8 @@ class DatabaseManager:
             logging.error(f"Failed to create booking: {e}")
             return None
 
-    def get_pending_bookings(self) -> List[Dict]:
-        """Get all pending bookings for processing"""
+    def get_pending_bookings(self, is_premium_run: bool) -> List[Dict]:
+        """Get pending bookings based on run type"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -86,13 +86,10 @@ class DatabaseManager:
                     FROM bookings b
                     JOIN users u ON b.telegram_id = u.telegram_id
                     WHERE b.status = 'pending'
-                    ORDER BY
-                        CASE u.subscription_status
-                            WHEN 'paid' THEN 1
-                            ELSE 2
-                        END,
-                        b.created_at ASC
-                """
+                    AND b.is_premium = ?
+                    ORDER BY b.created_at ASC
+                    """,
+                    (is_premium_run,),
                 )
                 columns = [col[0] for col in cursor.description]
                 return [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -100,24 +97,17 @@ class DatabaseManager:
             logging.error(f"Failed to get pending bookings: {e}")
             return []
 
-    def add_booking(self, telegram_id: int, booking_date: str, booking_time: str, sport: str, player_nifs: str) -> None:
-        """
-        Add a new booking to the database
-
-        Args:
-            telegram_id (int): Telegram user ID
-            booking_date (str): Date of booking in YYYY-MM-DD format
-            booking_time (str): Time of booking in HH:MM format
-            sport (str): Sport type (tenis/padel)
-            player_nifs (str): JSON string containing list of player NIFs
-        """
+    def add_booking(
+        self, telegram_id: int, booking_date: str, booking_time: str, sport: str, player_nifs: str, is_premium: bool
+    ) -> None:
+        """Add a new booking to the database"""
         query = """
-            INSERT INTO bookings (telegram_id, booking_date, booking_time, sport, player_nifs, status)
-            VALUES (?, ?, ?, ?, ?, 'pending')
+            INSERT INTO bookings (telegram_id, booking_date, booking_time, sport, player_nifs, status, is_premium)
+            VALUES (?, ?, ?, ?, ?, 'pending', ?)
         """
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(query, (telegram_id, booking_date, booking_time, sport, player_nifs))
+            cursor.execute(query, (telegram_id, booking_date, booking_time, sport, player_nifs, is_premium))
             conn.commit()
 
     def get_user_credits(self, telegram_id: int) -> int:
@@ -162,3 +152,102 @@ class DatabaseManager:
     def refund_booking_credit(self, telegram_id: int):
         """Refund one booking credit to a user's account"""
         self.add_booking_credits(telegram_id, 1)
+
+    def get_user_bookings(self, telegram_id: int) -> list:
+        """Get all bookings for a user"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, sport, booking_date, booking_time, player_nifs, status
+                FROM bookings
+                WHERE telegram_id = ?
+                ORDER BY booking_date DESC, booking_time DESC
+                """,
+                (telegram_id,),
+            )
+            bookings = cursor.fetchall()
+
+        # Convert to list of dictionaries with named keys
+        return [
+            {
+                "id": row[0],
+                "sport": row[1],
+                "booking_date": row[2],
+                "booking_time": row[3],
+                "player_nifs": row[4],
+                "status": row[5],
+            }
+            for row in bookings
+        ]
+
+    def get_user_credentials(self, telegram_id: int) -> Optional[Dict]:
+        """Get user's stored credentials"""
+        query = """
+            SELECT username, password
+            FROM users
+            WHERE telegram_id = ?
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (telegram_id,))
+            result = cursor.fetchone()
+            if result:
+                return {"username": result[0], "password": result[1]}
+            return None
+
+    def add_player(self, nif: str, name: str) -> None:
+        """
+        Add or update a player in the database
+        """
+        query = """
+            INSERT INTO players (nif, name)
+            VALUES (?, ?)
+            ON CONFLICT(nif) DO UPDATE SET
+                name = EXCLUDED.name,
+                updated_at = CURRENT_TIMESTAMP
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (nif, name))
+            conn.commit()
+
+    def get_frequent_partners(self, telegram_id: int, limit: int = 5) -> List[Dict]:
+        """
+        Get the most frequent playing partners for a user
+        """
+        query = """
+            SELECT partner_name, partner_nif, booking_count
+            FROM book_count
+            WHERE booker_nif = (SELECT username FROM users WHERE telegram_id = ?)
+            ORDER BY booking_count DESC
+            LIMIT ?
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (telegram_id, limit))
+            return [{"name": row[0], "nif": row[1], "count": row[2]} for row in cursor.fetchall()]
+
+    def cancel_booking(self, booking_id: int, user_id: int) -> bool:
+        """Cancel a booking and return True if successful"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            # Verify the booking belongs to the user and is pending
+            cursor.execute(
+                """
+                UPDATE bookings
+                SET status = 'cancelled'
+                WHERE id = ? AND telegram_id = ? AND status = 'pending'
+                """,
+                (booking_id, user_id),
+            )
+            return cursor.rowcount > 0
+
+    def add_booking_credit(self, telegram_id: int, credits: int) -> bool:
+        """Add booking credits to a user's account"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET booking_credits = booking_credits + ? WHERE telegram_id = ?", (credits, telegram_id)
+            )
+            return True
