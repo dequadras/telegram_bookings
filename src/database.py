@@ -207,10 +207,13 @@ class DatabaseManager:
                 name = EXCLUDED.name,
                 updated_at = CURRENT_TIMESTAMP
         """
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, (nif, name))
-            conn.commit()
+        if name:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (nif, name))
+                conn.commit()
+        else:
+            logging.warning(f"No name provided for player {nif}")
 
     def get_frequent_partners(self, telegram_id: int, limit: int = 5) -> List[Dict]:
         """
@@ -251,3 +254,47 @@ class DatabaseManager:
                 "UPDATE users SET booking_credits = booking_credits + ? WHERE telegram_id = ?", (credits, telegram_id)
             )
             return True
+
+    def update_user_credentials(self, telegram_id: int, username: str, password: str) -> bool:
+        """Update user's credentials in the database"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE users
+                    SET username = ?, password = ?
+                    WHERE telegram_id = ?
+                    """,
+                    (username, password, telegram_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logging.error(f"Failed to update user credentials: {e}")
+            return False
+
+    def execute_query(self, query: str, params: tuple = None):
+        """Execute a query with optional parameters"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+            conn.commit()
+            return cursor
+
+    def get_conversation_history(self, telegram_id: int, limit: int = 100):
+        """Retrieve conversation history for a user"""
+        query = """
+        SELECT message_type, message_text, timestamp
+        FROM conversation_logs
+        WHERE telegram_id = ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (telegram_id, limit))
+            return cursor.fetchall()

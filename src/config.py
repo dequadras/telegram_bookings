@@ -1,9 +1,11 @@
 import os
 from dataclasses import dataclass
+
 from dotenv import load_dotenv
 
 # Load .env file at the start
 load_dotenv()
+
 
 @dataclass
 class BotConfig:
@@ -26,4 +28,10 @@ class BookingConfig:
     TENIS_CLUB_PASSWORD: str = os.environ.get("TENIS_CLUB_PASSWORD", "")
 
 
-CONFIG = {"bot": BotConfig(), "stripe": StripeConfig(), "booking": BookingConfig()}
+@dataclass
+class PayPalConfig:
+    BUSINESS_EMAIL = "autobooking6@gmail.com"
+    IPN_URL = "https://your-domain.com/paypal-ipn"  # URL that will handle PayPal IPN notifications
+
+
+CONFIG = {"bot": BotConfig(), "stripe": StripeConfig(), "booking": BookingConfig(), "paypal": PayPalConfig()}

@@ -6,6 +6,7 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import cv2
 import numpy as np
@@ -24,7 +25,6 @@ from database import DatabaseManager
 
 # todo check that I can book in the most wanted spots (eg do my own telegram bookings)
 # todo (later)retry booking if it fails
-
 # Add at the top of the file, after imports
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S")
 
@@ -43,13 +43,17 @@ def get_db_connection():
         conn.close()
 
 
-async def handle_many_bookings(test=False):
+async def handle_many_bookings(test=False, is_premium=False):
     """
     Handle all pending bookings for tomorrow. Executed at 7am each day.
     Processes multiple bookings concurrently using asyncio.
+
+    Args:
+        test (bool): Whether this is a test run
+        is_premium (bool): Whether to process premium or free bookings
     """
-    bookings = get_todays_bookings(test=test)
-    logging.info(f"Processing {len(bookings)} bookings: {bookings}")
+    bookings = get_todays_bookings(test=test, is_premium=is_premium)
+    logging.info(f"Processing {len(bookings)} {'premium' if is_premium else 'free'} bookings: {bookings}")
     # Create tasks for each booking
     tasks = []
     for booking_id, telegram_id, booking_time, username, password, sport, player_nifs in bookings:
@@ -73,7 +77,7 @@ async def handle_many_bookings(test=False):
         await asyncio.gather(*tasks)
 
 
-def get_todays_bookings(test=False):
+def get_todays_bookings(test=False, is_premium=False):
     if not test:
         tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
 
@@ -84,19 +88,40 @@ def get_todays_bookings(test=False):
                 SELECT b.id, b.telegram_id, b.booking_time, u.username, u.password, b.sport, b.player_nifs
                 FROM bookings b
                 JOIN users u ON b.telegram_id = u.telegram_id
-                WHERE b.booking_date = ? AND b.status = 'pending'
+                WHERE b.booking_date = ?
+                AND b.status = 'pending'
+                AND b.is_premium = ?
                 """,
-                (tomorrow,),
+                (tomorrow, is_premium),
             )
             bookings = cursor.fetchall()
+        logging.info(f"Query returned {len(bookings)} results: {bookings}")
         return bookings
     else:
+        # For testing, you might want to add is_premium to your test data
         bookings = [
-            # booking_id, telegram_id, booking_time, username, password,, sport, player_nifs
+            # booking_id, telegram_id, booking_time, username, password, sport, player_nifs
             (1, "123456", "10:00", "46151293E", "Luis1992", "tenis", '["60105994W"]'),
             (2, "789012", "09:00", "46152627E", "Lucas1994", "tenis", '["60432112A"]'),
         ]
     return bookings
+
+
+class BookingLogger:
+    def __init__(self):
+        self.db = DatabaseManager()
+
+    async def log_conversation(self, telegram_id: int, message_type: str, message_text: str):
+        """Log a conversation message"""
+        query = """
+        INSERT INTO conversation_logs (telegram_id, message_type, message_text)
+        VALUES (?, ?, ?);
+        """
+        self.db.execute_query(query, (telegram_id, message_type, message_text))
+
+
+# Create a global instance
+booking_logger = BookingLogger()
 
 
 async def process_booking(booking_id, telegram_id, booking_time, username, password, sport, player_nifs, test=False):
@@ -143,6 +168,8 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
                 f"Jugadores:\n{players_text}"
             )
 
+            # Log bot's response before sending
+            await booking_logger.log_conversation(telegram_id, "bot_response", success_message)
             await bot.send_message(chat_id=telegram_id, text=success_message)
 
         logging.info(f"Booking completed successfully - ID: {booking_id}, User: {username}, Time: {booking_time}")
@@ -150,8 +177,7 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
     except Exception as e:
         error_message = (
             f"❌ Error al procesar tu reserva de {sport} para las {booking_time}\n\n"
-            f"Error: {str(e)}\n\n"
-            "Por favor, intenta de nuevo más tarde."
+            f"Es posible que no haya pistas disponibles a esa hora"
         )
 
         # Send detailed error notification to admin
@@ -166,7 +192,11 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
 
         logging.error(f"Booking failed - ID: {booking_id}, User: {username}, Error: {str(e)}", exc_info=True)
         if not test:
+            # Log error messages before sending
+            await booking_logger.log_conversation(telegram_id, "bot_response", error_message)
             await bot.send_message(chat_id=telegram_id, text=error_message)
+
+            await booking_logger.log_conversation(admin_id, "bot_response", admin_error_message)
             await bot.send_message(chat_id=admin_id, text=admin_error_message, parse_mode="Markdown")
             logging.info(f"Updating booking status to failed - ID: {booking_id}")
             with get_db_connection() as conn:
@@ -256,11 +286,28 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
                         nparr = np.frombuffer(screenshot, np.uint8)
                         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                         img = cv2.resize(img, (1920, 1080))
+
+                        # Add timestamp to frame
+                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                        # Get text size and position it in center top
+                        font = cv2.FONT_HERSHEY_SIMPLEX
+                        font_scale = 1
+                        thickness = 2
+                        text_size = cv2.getTextSize(timestamp, font, font_scale, thickness)[0]
+                        text_x = (img.shape[1] - text_size[0]) // 2
+                        text_y = text_size[1] + 20  # 20 pixels padding from top
+
+                        # Draw black background for better readability
+                        cv2.rectangle(img, (text_x - 10, 0), (text_x + text_size[0] + 10, text_y + 10), (0, 0, 0), -1)
+
+                        # Draw white text
+                        cv2.putText(img, timestamp, (text_x, text_y), font, font_scale, (255, 255, 255), thickness)
+
                         out.write(img)
                         time.sleep(0.05)  # 20 FPS
                     except Exception as e:
-                        # Log the error but continue recording
                         logging.debug(f"Screenshot capture failed: {str(e)}")
+                        raise
                         continue
 
             # Start recording thread
@@ -307,8 +354,10 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
 
         logging.info(f"Selecting booking day: {day}")
         # Select day in dropdown
+        time.sleep(3)
         day_dropdown = Select(wait.until(EC.presence_of_element_located((By.ID, "lstDate"))))
         day_dropdown.select_by_value("1" if day == "Mañana" else "0")
+        time.sleep(3)
 
         logging.info(f"Selecting booking hour: {hour}")
         # Select hour
@@ -321,7 +370,7 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
                     )
                 )
             )
-            hour_element.click()
+
         elif sport == "tenis":
             # Find tenis hour slot that matches the requested time
             hour_element = WebDriverWait(driver, 10).until(
@@ -334,27 +383,10 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
                     )
                 )
             )
-            hour_element.click()  # todo output error saying time is not available
+        if day == "Mañana":
+            wait_until_7am()
+        hour_element.click()  # todo output error saying time is not available
         # todo check there is availability
-        # todo if not avialabl, select closest hour that is less than 30 mins away
-
-        # Add this debug code before trying to interact with nif1_field
-        # print("Current URL:", driver.current_url)
-
-        # # Check if element exists
-        # elements = driver.find_elements(By.ID, "txtNIF1")
-        # print("Number of elements found:", len(elements))
-
-        # # Check element properties
-        # if elements:
-        #     print("Element displayed:", elements[0].is_displayed())
-        #     print("Element enabled:", elements[0].is_enabled())
-
-        #     # Get element location and size
-        #     location = elements[0].location
-        #     size = elements[0].size
-        #     print("Element location:", location)
-        #     print("Element size:", size)
 
         if sport == "padel":
             # Input first NIF and press tab
@@ -451,6 +483,19 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
             logging.warning(f"Failed to remove Chrome profile directory: {e}")
 
 
+def wait_until_7am():
+    # Wait until exactly 7:00:00 before selecting "Mañana"
+    current_time = datetime.now(ZoneInfo("Europe/Madrid")).time()
+    target_time = datetime.strptime("07:00:00", "%H:%M:%S").replace(tzinfo=ZoneInfo("Europe/Madrid")).time()
+
+    if current_time < target_time:
+        wait_seconds = (
+            datetime.combine(datetime.today(), target_time) - datetime.combine(datetime.today(), current_time)
+        ).total_seconds()
+        logging.info(f"Waiting {wait_seconds:.2f} seconds until 7:00:00")
+        time.sleep(wait_seconds)
+
+
 def check_credentials(credentials):
     driver = get_driver()
     wait = WebDriverWait(driver, 10)
@@ -533,5 +578,5 @@ if __name__ == "__main__":
     #     player_nifs=player_nifs[:1]
     # )
     # test_check_credentials_valid()
-    test_check_credentials_invalid()
+    # test_check_credentials_invalid()
     print("done")

@@ -56,7 +56,7 @@ Type=oneshot
 User=root
 WorkingDirectory=/root/telegram_bookings
 Environment=PYTHONPATH=/root/telegram_bookings
-ExecStart=/root/telegram_bookings/venv/bin/python /root/telegram_bookings/src/run_bookings.py
+ExecStart=/root/telegram_bookings/venv/bin/python /root/telegram_bookings/src/run_bookings.py --is_premium true
 StandardOutput=append:/var/log/polo-bookings.log
 StandardError=append:/var/log/polo-bookings.log
 
@@ -67,10 +67,44 @@ WantedBy=multi-user.target
 /etc/systemd/system/polo-bookings.timer
 ````
 [Unit]
-Description=Run RC Polo bookings daily at 7am Madrid time
+Description=Run RC Polo bookings daily at 6.59am Madrid time
 
 [Timer]
-OnCalendar=*-*-* 07:00:00 Europe/Madrid
+OnCalendar=*-*-* 06:59:00 Europe/Madrid
+Persistent=true
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
+```
+
+
+/etc/systemd/system/polo-bookings-free.service
+```
+[Unit]
+Description=RC Polo Booking Service
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/telegram_bookings
+Environment=PYTHONPATH=/root/telegram_bookings
+ExecStart=/root/telegram_bookings/venv/bin/python /root/telegram_bookings/src/run_bookings.py --is_premium false
+StandardOutput=append:/var/log/polo-bookings-free.log
+StandardError=append:/var/log/polo-bookings-free.log
+
+[Install]
+WantedBy=multi-user.target
+```
+
+/etc/systemd/system/polo-bookings-free.timer
+````
+[Unit]
+Description=Run RC Polo bookings daily at 8am Madrid time
+
+[Timer]
+OnCalendar=*-*-* 08:00:00 Europe/Madrid
 Persistent=true
 AccuracySec=1s
 
@@ -84,9 +118,13 @@ Restart
 sudo systemctl restart telegram_bookings_bot.service
 sudo systemctl restart polo-bookings.timer
 sudo systemctl restart polo-bookings.service
+sudo systemctl restart polo-bookings-free.timer
+sudo systemctl restart polo-bookings-free.service
 
 # Verify everything is running correctly
 sudo systemctl status telegram_bookings_bot.service
 sudo systemctl status polo-bookings.timer
 sudo systemctl status polo-bookings.service
+sudo systemctl status polo-bookings-free.timer
+sudo systemctl status polo-bookings-free.service
 ```

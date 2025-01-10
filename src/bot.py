@@ -24,15 +24,13 @@ from telegram.ext import (
 from config import CONFIG
 from database import DatabaseManager
 
-# todo players should be saved (e.g. next time have the option to click on a person's name instead of typing nif)
-# todo check credentials work right away
-# todo cehck that the booking would work (without actually booking, eg try dummy booking)
-# todo prompt if we want to book at a different time if the exact hour is not available
-# States for conversation handler
-# add a command to reenter password and username
-# add buy, remove subscribe
-# execute run_bookings twixe, for free and premium
+# todo (later) check credentials work right away
+# todo (later) check that the booking would work (without actually booking, eg try dummy booking)
+# todo (later) prompt if we want to book at a different time if the exact hour is not available
 # todo code that checks at 7am in the morning how many courts are available, every 20 seconds
+# (later) todo remove warnings in the bot
+# todo if i select one NIF for player 2, remove it from the options for player 3 and 4, same with player 3 removed 4
+
 (
     SELECTING_SPORT,
     SELECTING_DATE,
@@ -44,7 +42,9 @@ from database import DatabaseManager
     ENTERING_PLAYER3,
     ENTERING_PLAYER4,
     SELECTING_BOOKING_TYPE,
-) = range(10)
+    UPDATING_ID,
+    UPDATING_PASSWORD,
+) = range(12)
 
 
 class TenisBookingBot:
@@ -56,6 +56,14 @@ class TenisBookingBot:
             self.schedule = json.load(f)
         self.admin_id = 249843154  # Add admin telegram ID
 
+    async def log_conversation(self, telegram_id: int, message_type: str, message_text: str):
+        """Log a conversation message"""
+        query = """
+        INSERT INTO conversation_logs (telegram_id, message_type, message_text)
+        VALUES (?, ?, ?);
+        """
+        self.db.execute_query(query, (telegram_id, message_type, message_text))
+
     async def notify_admin(self, message: str):
         """Send notification to admin"""
         try:
@@ -65,6 +73,9 @@ class TenisBookingBot:
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /start command"""
+        # Log user's message
+        await self.log_conversation(update.effective_user.id, "user_message", "Command: /start")
+
         user = update.effective_user
         self.logger.info(f"New user started bot: {user.id} ({user.username})")
         self.db.add_user(
@@ -77,18 +88,27 @@ class TenisBookingBot:
 
         welcome_text = (
             f"¡Bienvenido/a {user.first_name}! 🎾\n\n"
-            "Te puedo ayudar a reservar pistas. Esto es lo que puedes hacer:\n"
+            "Te puedo ayudar a reservar pistas de tenis y padel. Esto es lo que puedes hacer:\n"
             "/book - Reservar una pista\n"
             "/mybookings - Ver tus reservas\n"
-            "/subscribe - Obtener reservas ilimitadas\n"
+            "/buy - Obtener reservas premium\n"
             "/help - Obtener ayuda"
         )
+
+        # Log bot's response
+        await self.log_conversation(update.effective_user.id, "bot_response", welcome_text)
 
         await update.message.reply_text(welcome_text)
 
     async def book(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Start the booking process by selecting sport"""
+        self.logger.info(f"Book command received from user {update.effective_user.id}")
+        self.logger.debug(f"Update object: {update}")
         self.logger.info(f"User {update.effective_user.id} started booking process")
+
+        # Clear any existing conversation data
+        context.user_data.clear()
+
         keyboard = [
             [
                 InlineKeyboardButton("Tenis 🎾", callback_data="sport_tenis"),
@@ -96,8 +116,22 @@ class TenisBookingBot:
             ]
         ]
 
-        await update.message.reply_text("Please select a sport:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return SELECTING_SPORT
+        message_text = "Por favor, selecciona un deporte:"
+
+        # Add error handling and logging
+        try:
+            # Log bot's response
+            await self.log_conversation(update.effective_user.id, "bot_response", message_text)
+
+            await update.message.reply_text(message_text, reply_markup=InlineKeyboardMarkup(keyboard))
+            self.logger.debug("Sport selection keyboard sent successfully")
+            return SELECTING_SPORT
+        except Exception:
+            error_message = "Lo siento, ha ocurrido un error. Por favor, inténtalo de nuevo."
+            # Log error response
+            await self.log_conversation(update.effective_user.id, "bot_response", error_message)
+            await update.message.reply_text(error_message)
+            return ConversationHandler.END
 
     async def select_date(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle sport selection and show date options"""
@@ -107,13 +141,31 @@ class TenisBookingBot:
         self.logger.info(f"User {update.effective_user.id} selected sport: {sport}")
         context.user_data["sport"] = sport
 
-        # Create date selection keyboard (same as before)
-        dates = []
+        # Create date selection keyboard with formatted dates
+        spanish_days = {0: "Lunes", 1: "Martes", 2: "Miércoles", 3: "Jueves", 4: "Viernes", 5: "Sábado", 6: "Domingo"}
+        spanish_months = {
+            1: "enero",
+            2: "febrero",
+            3: "marzo",
+            4: "abril",
+            5: "mayo",
+            6: "junio",
+            7: "julio",
+            8: "agosto",
+            9: "septiembre",
+            10: "octubre",
+            11: "noviembre",
+            12: "diciembre",
+        }
+
+        keyboard = []
         for i in range(7):
             date = datetime.now() + timedelta(days=i + 2)
-            dates.append(date.strftime("%Y-%m-%d"))
-
-        keyboard = [[InlineKeyboardButton(date, callback_data=f"date_{date}")] for date in dates]
+            # Store date in YYYY-MM-DD format for internal use
+            date_value = date.strftime("%Y-%m-%d")
+            # Format display text as "Día DD de Mes"
+            display_text = f"{spanish_days[date.weekday()]} {date.day} de {spanish_months[date.month]}"
+            keyboard.append([InlineKeyboardButton(display_text, callback_data=f"date_{date_value}")])
 
         await query.edit_message_text("Por favor, selecciona una fecha:", reply_markup=InlineKeyboardMarkup(keyboard))
         return SELECTING_DATE
@@ -132,10 +184,22 @@ class TenisBookingBot:
         # Check if user already has credentials stored
         user_data = self.db.get_user_credentials(update.effective_user.id)
         if user_data and user_data["username"] and user_data["password"]:
-            # If credentials exist, store them and skip to player2
+            # If credentials exist, store them
             context.user_data["user_id"] = user_data["username"]
             context.user_data["password"] = user_data["password"]
-            await query.edit_message_text("Por favor, selecciona o introduce el NIF del segundo jugador:")
+            # Call prompt_player_selection directly with the query message
+            keyboard = []
+            # Get recent players for this user
+            recent_players = self.db.get_frequent_partners(update.effective_user.id, limit=5)
+            if recent_players:
+                for player in recent_players:
+                    display_text = f"{player['name']} ({player['nif']})" if player["name"] else player["nif"]
+                    keyboard.append([KeyboardButton(display_text)])
+
+            reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+            await query.message.reply_text(
+                "Por favor, selecciona el jugador 2 o introduce un nuevo NIF:", reply_markup=reply_markup
+            )
             return ENTERING_PLAYER2
 
         # If no credentials, ask for them
@@ -164,8 +228,8 @@ class TenisBookingBot:
         self.logger.info(f"User {update.effective_user.id} entered password")
         context.user_data["password"] = update.message.text
 
-        await update.message.reply_text("Por favor, introduce el NIF del segundo jugador:")
-        return ENTERING_PLAYER2
+        # Instead of directly asking for NIF, use prompt_player_selection
+        return await self.prompt_player_selection(update, context, 2)
 
     async def collect_player2(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle second player selection"""
@@ -309,20 +373,15 @@ class TenisBookingBot:
         user_id = update.effective_user.id
 
         # Get recent players for this user
-        recent_players = self.db.get_frequent_partners(
-            user_id, limit=5
-        )  # You'll need to implement this in DatabaseManager
+        recent_players = self.db.get_frequent_partners(user_id, limit=5)
 
         keyboard = []
         # Add recent players if any exist
         if recent_players:
-            for nif, name in recent_players:
+            for player in recent_players:
                 # Display name if available, otherwise just NIF
-                display_text = f"{name} ({nif})" if name else nif
+                display_text = f"{player['name']} ({player['nif']})" if player["name"] else player["nif"]
                 keyboard.append([KeyboardButton(display_text)])
-
-        # Add option to enter new player
-        keyboard.append([KeyboardButton("Introducir nuevo NIF")])
 
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
 
@@ -405,28 +464,18 @@ class TenisBookingBot:
 
     async def buy_credits(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the purchase of additional booking credits"""
-        keyboard = [[InlineKeyboardButton("Comprar 10 reservas (10€)", callback_data="buy_credits")]]
+        paypal_link = "https://www.sandbox.paypal.com/ncp/payment/6MBDS94TBXXEA"
 
         await update.message.reply_text(
             "🎯 Comprar reservas adicionales:\n\n"
-            "• 10 reservas por 10€\n"
-            "• Pago seguro con Stripe\n"
-            "• Las reservas no caducan",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-
-    async def handle_buy_credits(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Process the credit purchase"""
-        query = update.callback_query
-        await query.answer()
-
-        # Create Stripe payment link (implementation depends on your Stripe setup)
-        payment_link = "https://your-stripe-payment-link"
-
-        await query.edit_message_text(
-            "Para completar tu compra, haz click en el siguiente enlace:\n\n"
-            f"{payment_link}\n\n"
-            "Una vez completado el pago, tus reservas estarán disponibles inmediatamente."
+            "• 5 reservas por 5€\n"
+            "• Pago seguro con PayPal\n\n"
+            "Para completar tu compra:\n"
+            f"1️⃣ [Haz click aquí para pagar]({paypal_link})\n"
+            "2️⃣ Las reservas se añadirán automáticamente a tu cuenta\n\n"
+            "_Las reservas no caducan_",
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
         )
 
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -436,9 +485,11 @@ class TenisBookingBot:
             "Te ayudo a reservar pistas de tenis y pádel en el RCPolo. Estos son mis comandos:\n\n"
             "🎾 */book* - Reservar una pista\n"
             "📅 */mybookings* - Ver tus reservas actuales\n"
-            "⭐️ */subscribe* - Obtener reservas ilimitadas\n"
+            "🔑 */password* - Actualizar credenciales\n"
+            "⭐️ */buy* - Obtener reservas premium\n"
             "❓ */help* - Ver este mensaje de ayuda\n\n"
-            "Para empezar una reserva, simplemente usa el comando /book"
+            "Para empezar una reserva, simplemente usa el comando /book\n\n"
+            "📧 Si tienes problemas, escribe a autobooking6@gmail.com"
         )
 
         await update.message.reply_text(help_text, parse_mode="Markdown")
@@ -573,37 +624,64 @@ class TenisBookingBot:
         # Call confirm_booking with the query object
         return await self.confirm_booking(update, context, query)
 
+    async def update_password(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle the /password command to update credentials"""
+        self.logger.info(f"User {update.effective_user.id} updating credentials")
+        await update.message.reply_text("Por favor, introduce tu nuevo usuario (NIF):")
+        return UPDATING_ID
+
+    async def handle_update_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle new ID input when updating credentials"""
+        user_id = update.message.text.upper()
+        if not self.validate_nif(user_id):
+            await update.message.reply_text("El NIF introducido no es válido. Por favor, introduce un NIF válido:")
+            return UPDATING_ID
+
+        context.user_data["new_user_id"] = user_id
+        await update.message.reply_text("Por favor, introduce tu nueva contraseña:")
+        return UPDATING_PASSWORD
+
+    async def handle_update_password(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle new password input when updating credentials"""
+        new_password = update.message.text
+        user_id = update.effective_user.id
+
+        # Update credentials in database
+        self.db.update_user_credentials(
+            telegram_id=user_id, username=context.user_data["new_user_id"], password=new_password
+        )
+
+        await update.message.reply_text("✅ Tus credenciales han sido actualizadas correctamente.")
+        return ConversationHandler.END
+
     def run(self):
         """Run the bot"""
         self.logger.info("Initializing bot")
         application = Application.builder().token(CONFIG["bot"].TOKEN).build()
-        self.application = application  # Store application instance for notifications
-
-        # Set up bot commands that appear in the menu
-        commands = [
-            ("start", "Iniciar el bot"),
-            ("book", "Reservar una pista"),
-            ("mybookings", "Ver mis reservas"),
-            ("subscribe", "Obtener reservas ilimitadas"),
-            ("help", "Obtener ayuda"),
-        ]
+        self.application = application
 
         # Set up commands and bot metadata synchronously at startup
-        application.bot.set_my_commands(commands)
-        application.bot.set_my_description("¡Hola! Soy el bot de reservas del RCPolo. Pulsa 'Iniciar' para empezar. 🎾")
+        application.bot.set_my_description(
+            "¡Hola! Soy el bot de reservas del RCPolo. Pulsa 'Iniciar' para empezar. 🎾\n"
+            'Este bot se "despierta" a las 7am para procesar las reservas de pistas. Si alguna vez te has visto en la'
+            " situación de no tener pistas disponibles por haberte despertado tarde, esto puede ser tu solución.\n"
+            "Usa el comando /book para empezar una reserva. Esta se guardará y se gestionará el día anterior a la "
+            "reserva a las 7am\n"
+            "Encontrarás más información con el comando /help"
+        )
         application.bot.set_my_short_description("Bot de reservas de pistas del RCPolo")
 
         # Change from default menu button (3 bars) to text "Menu"
         application.bot.set_chat_menu_button(menu_button={"type": "commands", "text": "Menu"})
 
-        # Update conversation handler
+        # First, create the conversation handler
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler("book", self.book)],
             states={
-                SELECTING_SPORT: [CallbackQueryHandler(self.select_date, pattern="^sport_")],
-                SELECTING_DATE: [CallbackQueryHandler(self.select_time, pattern="^date_")],
-                SELECTING_TIME: [CallbackQueryHandler(self.select_preference, pattern="^time_")],
-                SELECTING_PREFERENCE: [CallbackQueryHandler(self.select_preference, pattern="^pref_")],
+                SELECTING_SPORT: [CallbackQueryHandler(self.select_date, pattern=r"^sport_(tenis|padel)$")],
+                SELECTING_DATE: [CallbackQueryHandler(self.select_time, pattern=r"^date_\d{4}-\d{2}-\d{2}$")],
+                SELECTING_TIME: [CallbackQueryHandler(self.select_preference, pattern=r"^time_")],
+                SELECTING_PREFERENCE: [CallbackQueryHandler(self.select_preference, pattern=r"^pref_")],
                 ENTERING_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_id)],
                 ENTERING_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_password)],
                 ENTERING_PLAYER2: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_player2)],
@@ -611,18 +689,84 @@ class TenisBookingBot:
                 ENTERING_PLAYER4: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.collect_player4)],
                 SELECTING_BOOKING_TYPE: [CallbackQueryHandler(self.process_booking_type)],
             },
-            fallbacks=[CommandHandler("cancel", self.cancel)],
+            fallbacks=[CommandHandler("cancel", self.cancel), CommandHandler("book", self.book)],
+            name="booking_conversation",
+            persistent=False,
         )
 
-        # Add handlers
-        application.add_handler(CommandHandler("start", self.start))
-        application.add_handler(CommandHandler("help", self.help))
-        application.add_handler(conv_handler)
-        application.add_handler(CommandHandler("mybookings", self.mybookings))
-        application.add_handler(CallbackQueryHandler(self.cancel_booking, pattern="^(cancel_|confirm_cancel_)"))
-        application.add_handler(CallbackQueryHandler(self.keep_booking, pattern="^keep_booking"))
+        # Register handlers in specific order
+        handlers = [
+            # First, add the conversation handler
+            conv_handler,
+            # Then add other command handlers
+            CommandHandler("start", self.start),
+            CommandHandler("help", self.help),
+            CommandHandler("mybookings", self.mybookings),
+            # Add callback query handlers
+            CallbackQueryHandler(self.cancel_booking, pattern="^(cancel_|confirm_cancel_)"),
+            CallbackQueryHandler(self.keep_booking, pattern="^keep_booking"),
+            # Add the password update conversation handler
+            ConversationHandler(
+                entry_points=[CommandHandler("password", self.update_password)],
+                states={
+                    UPDATING_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_update_id)],
+                    UPDATING_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_update_password)],
+                },
+                fallbacks=[CommandHandler("cancel", self.cancel)],
+            ),
+            # Add buy command handler
+            CommandHandler("buy", self.buy_credits),
+        ]
 
-        self.logger.info("Bot started successfully")
+        # Register all handlers with error handling
+        for handler in handlers:
+            try:
+                application.add_handler(handler)
+                self.logger.info(f"Successfully added handler: {handler.__class__.__name__}")
+            except Exception as e:
+                self.logger.error(f"Failed to add handler {handler.__class__.__name__}: {e}")
+
+        # Set up commands that appear in the menu
+        commands = [
+            ("start", "Iniciar el bot"),
+            ("book", "Reservar una pista"),
+            ("mybookings", "Ver mis reservas"),
+            ("buy", "Obtener reservas premium"),
+            ("help", "Obtener ayuda"),
+        ]
+
+        try:
+            application.bot.set_my_commands(commands)
+            self.logger.info("Bot commands set successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to set bot commands: {e}")
+
+        # Create message logging middleware class
+        class MessageLoggingMiddleware:
+            def __init__(self, bot_instance):
+                self.bot = bot_instance
+
+            async def __call__(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+                """Log all messages before they are processed"""
+                if update.message:
+                    await self.bot.log_conversation(update.effective_user.id, "user_message", update.message.text)
+                elif update.callback_query:
+                    await self.bot.log_conversation(
+                        update.effective_user.id, "user_callback", update.callback_query.data
+                    )
+
+                # If this is a bot response (check context.bot_data)
+                if hasattr(update, "effective_message") and update.effective_message:
+                    if getattr(context.bot_data, "is_bot_response", False):
+                        await self.bot.log_conversation(
+                            update.effective_chat.id, "bot_response", update.effective_message.text
+                        )
+
+        # Add middleware to log all messages
+        application.add_handler(MessageHandler(filters.ALL, MessageLoggingMiddleware(self)), group=-1)
+
+        # Start the bot
+        self.logger.info("Starting polling...")
         application.run_polling()
 
 

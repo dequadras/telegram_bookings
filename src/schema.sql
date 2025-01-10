@@ -44,6 +44,15 @@ CREATE TABLE IF NOT EXISTS players (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS conversation_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    telegram_id INTEGER NOT NULL,
+    message_type TEXT NOT NULL,
+    message_text TEXT NOT NULL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (telegram_id) REFERENCES users(telegram_id)
+);
+
 -- Create a trigger to update the updated_at timestamp
 CREATE TRIGGER IF NOT EXISTS update_players_timestamp
 AFTER UPDATE ON players
