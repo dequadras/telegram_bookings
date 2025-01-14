@@ -128,3 +128,20 @@ sudo systemctl status polo-bookings.service
 sudo systemctl status polo-bookings-free.timer
 sudo systemctl status polo-bookings-free.service
 ```
+
+
+Test de carga
+```sql
+INSERT INTO users (telegram_id, username, password, first_name, booking_credits, created_at)
+VALUES
+    (10, '46152627E', 'Lucas19994', 'Ldq', 5, CURRENT_TIMESTAMP),
+    (11, '21775603P', 'Roman2003', 'Rdq', 5, CURRENT_TIMESTAMP);
+
+INSERT INTO bookings (telegram_id, booking_date, booking_time, status, sport, player_nifs, is_premium)
+VALUES
+    (10, '2025-01-16', '18:30', 'pending', 'padel', '["46151293E", "21775603P", "60432112A"]', 1),
+    (11, '2025-01-16', '18:30', 'pending', 'padel', '["46151293E", "46152627E", "60432112A"]', 1);
+
+DELETE FROM users WHERE telegram_id in (10, 11);
+DELETE FROM bookings WHERE telegram_id in (10, 11);
+```

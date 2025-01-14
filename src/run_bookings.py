@@ -31,6 +31,3 @@ if __name__ == "__main__":
         logging.info("Booking process completed successfully")
     except Exception as e:
         logging.error(f"Booking failed with exception: {str(e)}", exc_info=True)
-        raise e
-
-# todo log with time and info

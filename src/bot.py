@@ -91,7 +91,7 @@ class TenisBookingBot:
             "Te puedo ayudar a reservar pistas de tenis y padel. Esto es lo que puedes hacer:\n"
             "/book - Reservar una pista\n"
             "/mybookings - Ver tus reservas\n"
-            "/buy - Obtener reservas premium\n"
+            "/getcredits - Obtener reservas premium\n"
             "/help - Obtener ayuda"
         )
 
@@ -275,7 +275,7 @@ class TenisBookingBot:
         if context.user_data.get("is_premium", False):
             credits = self.db.get_user_credits(user.id)
             if credits <= 0:
-                message = "❌ No tienes reservas disponibles.\n\n" "Puedes conseguir más reservas usando /buy"
+                message = "❌ No tienes reservas disponibles.\n\n" "Puedes conseguir más reservas usando /getcredits"
                 if query:
                     await query.edit_message_text(message)
                 else:
@@ -459,10 +459,10 @@ class TenisBookingBot:
         await update.message.reply_text(
             f"🎾 Información de tu cuenta:\n\n"
             f"Reservas disponibles: {credits}\n\n"
-            "Puedes conseguir 10 reservas adicionales por 10€ usando /buy"
+            "Puedes conseguir 10 reservas adicionales usando /getcredits"
         )
 
-    async def buy_credits(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def buy_credits_premium(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the purchase of additional booking credits"""
         paypal_link = "https://www.sandbox.paypal.com/ncp/payment/6MBDS94TBXXEA"
 
@@ -478,6 +478,15 @@ class TenisBookingBot:
             disable_web_page_preview=True,
         )
 
+    async def buy_credits(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle the purchase of additional booking credits"""
+        await update.message.reply_text(
+            "🔜 *Reservas premium*\n\n"
+            "Esta funcionalidad estará disponible próximamente.\n\n"
+            "Por favor, vuelve a intentarlo en unas semanas.",
+            parse_mode="Markdown",
+        )
+
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /help command"""
         help_text = (
@@ -486,7 +495,7 @@ class TenisBookingBot:
             "🎾 */book* - Reservar una pista\n"
             "📅 */mybookings* - Ver tus reservas actuales\n"
             "🔑 */password* - Actualizar credenciales\n"
-            "⭐️ */buy* - Obtener reservas premium\n"
+            "⭐️ */getcredits* - Obtener reservas premium\n"
             "❓ */help* - Ver este mensaje de ayuda\n\n"
             "Para empezar una reserva, simplemente usa el comando /book\n\n"
             "📧 Si tienes problemas, escribe a autobooking6@gmail.com"
@@ -590,14 +599,14 @@ class TenisBookingBot:
         keyboard = [
             [
                 InlineKeyboardButton("Premium (7:00) - 1 crédito", callback_data="booking_premium"),
-                InlineKeyboardButton("Gratuita (8:00)", callback_data="booking_free"),
+                InlineKeyboardButton("Básica (8:00)", callback_data="booking_free"),
             ]
         ]
 
         await update.message.reply_text(
             "Por favor, selecciona el tipo de reserva:\n\n"
             "🌟 *Premium*: Se intenta reservar a las 7:00 (coste: 1 crédito)\n"
-            "🆓 *Gratuita*: Se intenta reservar a las 8:00 (sin coste, menor probabilidad)",
+            "🆓 *Básica*: Se intenta reservar a las 8:00 (sin coste, menor probabilidad)",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown",
         )
@@ -617,7 +626,7 @@ class TenisBookingBot:
             if credits <= 0:
                 await query.edit_message_text(
                     "❌ No tienes créditos disponibles para reservas premium.\n\n"
-                    "Puedes conseguir más créditos usando /buy o hacer una reserva gratuita."
+                    "Puedes conseguir más créditos usando /getcredits o hacer una reserva básica."
                 )
                 return ConversationHandler.END
 
@@ -715,7 +724,7 @@ class TenisBookingBot:
                 fallbacks=[CommandHandler("cancel", self.cancel)],
             ),
             # Add buy command handler
-            CommandHandler("buy", self.buy_credits),
+            CommandHandler("getcredits", self.buy_credits),
         ]
 
         # Register all handlers with error handling
@@ -731,7 +740,7 @@ class TenisBookingBot:
             ("start", "Iniciar el bot"),
             ("book", "Reservar una pista"),
             ("mybookings", "Ver mis reservas"),
-            ("buy", "Obtener reservas premium"),
+            ("getcredits", "Obtener reservas premium"),
             ("help", "Obtener ayuda"),
         ]
 
