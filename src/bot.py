@@ -666,22 +666,8 @@ class TenisBookingBot:
     def run(self):
         """Run the bot"""
         self.logger.info("Initializing bot")
-        application = Application.builder().token(CONFIG["bot"].TOKEN).build()
+        application = Application.builder().token(CONFIG["bot"].TOKEN).post_init(post_init).build()
         self.application = application
-
-        # Set up commands and bot metadata synchronously at startup
-        application.bot.set_my_description(
-            "¡Hola! Soy el bot de reservas del RCPolo. Pulsa 'Iniciar' para empezar. 🎾\n"
-            'Este bot se "despierta" a las 7am para procesar las reservas de pistas. Si alguna vez te has visto en la'
-            " situación de no tener pistas disponibles por haberte despertado tarde, esto puede ser tu solución.\n"
-            "Usa el comando /book para empezar una reserva. Esta se guardará y se gestionará el día anterior a la "
-            "reserva a las 7am\n"
-            "Encontrarás más información con el comando /help"
-        )
-        application.bot.set_my_short_description("Bot de reservas de pistas del RCPolo")
-
-        # Change from default menu button (3 bars) to text "Menu"
-        application.bot.set_chat_menu_button(menu_button={"type": "commands", "text": "Menu"})
 
         # First, create the conversation handler
         conv_handler = ConversationHandler(
@@ -735,21 +721,6 @@ class TenisBookingBot:
             except Exception as e:
                 self.logger.error(f"Failed to add handler {handler.__class__.__name__}: {e}")
 
-        # Set up commands that appear in the menu
-        commands = [
-            ("start", "Iniciar el bot"),
-            ("book", "Reservar una pista"),
-            ("mybookings", "Ver mis reservas"),
-            ("getcredits", "Obtener reservas premium"),
-            ("help", "Obtener ayuda"),
-        ]
-
-        try:
-            application.bot.set_my_commands(commands)
-            self.logger.info("Bot commands set successfully")
-        except Exception as e:
-            self.logger.error(f"Failed to set bot commands: {e}")
-
         # Create message logging middleware class
         class MessageLoggingMiddleware:
             def __init__(self, bot_instance):
@@ -777,6 +748,33 @@ class TenisBookingBot:
         # Start the bot
         self.logger.info("Starting polling...")
         application.run_polling()
+
+
+async def post_init(application: Application) -> None:
+    await application.bot.set_my_description(
+        "¡Hola! Soy el bot de reservas del RCPolo. Pulsa 'Iniciar' para empezar. 🎾\n"
+        'Este bot se "despierta" a las 7am para procesar las reservas de pistas. Si alguna vez te has visto en la'
+        " situación de no tener pistas disponibles por haberte despertado tarde, esto puede ser tu solución.\n"
+        "Usa el comando /book para empezar una reserva. Esta se guardará y se gestionará el día anterior a la "
+        "reserva a las 7am\n"
+        "Encontrarás más información con el comando /help"
+    )
+
+    await application.bot.set_my_short_description("Bot de reservas de pistas del RCPolo")
+
+    # Change from default menu button (3 bars) to text "Menu"
+    await application.bot.set_chat_menu_button(menu_button={"type": "commands", "text": "Menu"})
+
+    # Set up commands that appear in the menu
+    commands = [
+        ("start", "Iniciar el bot"),
+        ("book", "Reservar una pista"),
+        ("mybookings", "Ver mis reservas"),
+        ("getcredits", "Obtener reservas premium"),
+        ("help", "Obtener ayuda"),
+    ]
+
+    await application.bot.set_my_commands(commands)
 
 
 if __name__ == "__main__":
