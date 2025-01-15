@@ -24,6 +24,7 @@ from telegram.ext import (
 from config import CONFIG
 from database import DatabaseManager
 
+# ensure message is sent to the user when booking is not preformed
 # todo (later) check credentials work right away
 # todo (later) check that the booking would work (without actually booking, eg try dummy booking)
 # todo (later) prompt if we want to book at a different time if the exact hour is not available

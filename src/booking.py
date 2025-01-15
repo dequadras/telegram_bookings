@@ -26,7 +26,11 @@ from database import DatabaseManager
 # todo check that I can book in the most wanted spots (eg do my own telegram bookings)
 # todo (later)retry booking if it fails
 # Add at the top of the file, after imports
-logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO, datefmt="%Y-%m-%d %H:%M:%S")
+logging.basicConfig(
+    format="%(asctime)s - %(levelname)s - [Booking %(booking_id)s] %(message)s",
+    level=logging.INFO,
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 CHROMEDRIVER_PATH = "/root/.wdm/drivers/chromedriver/linux64/131.0.6778.204/chromedriver-linux64/chromedriver"
 
@@ -126,7 +130,9 @@ booking_logger = BookingLogger()
 
 async def process_booking(booking_id, telegram_id, booking_time, username, password, sport, player_nifs, test=False):
     """Process a single booking asynchronously."""
-    logging.info(f"Starting booking process - ID: {booking_id}, User: {username}, Time: {booking_time}")
+    # Add booking_id to logger's extra info
+    logger = logging.LoggerAdapter(logging.getLogger(), {"booking_id": booking_id})
+    logger.info(f"Starting booking process - User: {username}, Time: {booking_time}")
     bot = Bot(token=CONFIG["bot"].TOKEN)
     admin_id = 249843154
 
@@ -142,10 +148,11 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
             player_nifs=player_nifs,
             record=True,
             test=test,
+            logger=logger,
         )
 
         if not test:
-            logging.info(f"Updating booking status to completed - ID: {booking_id}")
+            logger.info("Updating booking status to completed")
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
@@ -172,7 +179,7 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
             await booking_logger.log_conversation(telegram_id, "bot_response", success_message)
             await bot.send_message(chat_id=telegram_id, text=success_message)
 
-        logging.info(f"Booking completed successfully - ID: {booking_id}, User: {username}, Time: {booking_time}")
+        logger.info(f"Booking completed successfully - User: {username}, Time: {booking_time}")
 
     except Exception as e:
         error_message = (
@@ -190,7 +197,7 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
             f"Error: `{str(e)}`"
         )
 
-        logging.error(f"Booking failed - ID: {booking_id}, User: {username}, Error: {str(e)}", exc_info=True)
+        logger.error(f"Booking failed - User: {username}, Error: {str(e)}", exc_info=True)
         if not test:
             # Log error messages before sending
             await booking_logger.log_conversation(telegram_id, "bot_response", error_message)
@@ -198,7 +205,7 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
 
             await booking_logger.log_conversation(admin_id, "bot_response", admin_error_message)
             await bot.send_message(chat_id=admin_id, text=admin_error_message, parse_mode="Markdown")
-            logging.info(f"Updating booking status to failed - ID: {booking_id}")
+            logger.info(f"Updating booking status to failed - ID: {booking_id}")
             with get_db_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
@@ -245,7 +252,7 @@ def get_driver(booking_id=None):
     return driver
 
 
-def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=True, test=True):
+def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=True, test=True, logger=None):
     """
     Make a booking at RC Polo.
 
@@ -258,7 +265,9 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
         player_nifs (list): List of player NIFs as strings
         record (bool): Whether to record the booking process
         test (bool): If True, don't submit the final booking
+        logger (Logger): Logger instance
     """
+
     assert sport in ["padel", "tenis"]
     assert len(player_nifs) == 3 if sport == "padel" else 1
 
@@ -272,7 +281,7 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
         out = cv2.VideoWriter(output_path, fourcc, 20.0, (1920, 1080))
 
     try:
-        logging.info(f"Starting make_booking - ID: {booking_id}, Sport: {sport}, Day: {day}, Hour: {hour}")
+        logger.info(f"Starting make_booking - Sport: {sport}, Day: {day}, Hour: {hour}")
         wait = WebDriverWait(driver, 10)
 
         if record:
@@ -306,8 +315,7 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
                         out.write(img)
                         time.sleep(0.05)  # 20 FPS
                     except Exception as e:
-                        logging.debug(f"Screenshot capture failed: {str(e)}")
-                        raise
+                        logger.debug(f"Screenshot capture failed: {str(e)}")
                         continue
 
             # Start recording thread
@@ -318,23 +326,23 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
 
         # Remove individual capture_frame() calls as we're now recording continuously
 
-        logging.info("Navigating to RC Polo website")
+        logger.info("Navigating to RC Polo website")
         driver.get("https://rcpolo.com/")
         time.sleep(3)
         # Take a screenshot after loading the website
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         screenshot_path = f"polo_website_{booking_id}_{timestamp}.png"
         driver.save_screenshot(screenshot_path)
-        logging.info(f"Saved website screenshot to {screenshot_path}")
+        logger.info(f"Saved website screenshot to {screenshot_path}")
 
-        logging.info("Handling cookie consent")
+        logger.info("Handling cookie consent")
         # Click accept all cookies button
         cookie_button = WebDriverWait(driver, 10).until(
             EC.element_to_be_clickable((By.ID, "onetrust-accept-btn-handler"))
         )
         cookie_button.click()
 
-        logging.info("Logging in to RC Polo")
+        logger.info("Logging in to RC Polo")
         # Click acceso socio
         login_button = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.CSS_SELECTOR, "a.acceso-socios")))
         login_button.click()
@@ -352,14 +360,14 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
         # Navigate to booking page
         driver.get("https://rcpolo.com/areasocios/es/ov")
 
-        logging.info(f"Selecting booking day: {day}")
+        logger.info(f"Selecting booking day: {day}")
         # Select day in dropdown
         time.sleep(3)
         day_dropdown = Select(wait.until(EC.presence_of_element_located((By.ID, "lstDate"))))
         day_dropdown.select_by_value("1" if day == "Mañana" else "0")
         time.sleep(3)
 
-        logging.info(f"Selecting booking hour: {hour}")
+        logger.info(f"Selecting booking hour: {hour}")
         # Select hour
         if sport == "padel":
             hour_element = WebDriverWait(driver, 10).until(
@@ -384,7 +392,7 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
                 )
             )
         if day == "Mañana":
-            wait_until_7am()
+            wait_until_7am(logger)
         hour_element.click()  # todo output error saying time is not available
         # todo check there is availability
 
@@ -458,20 +466,20 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
         elif sport == "tenis":
             return {"success": True, "players": [{"name": name1, "nif": player_nifs[0]}]}
 
-        logging.info(f"Booking process completed successfully - ID: {booking_id}")
+        logger.info(f"Booking process completed successfully - ID: {booking_id}")
 
     except Exception as e:
-        logging.error(f"Error during booking process - ID: {booking_id}, Error: {str(e)}", exc_info=True)
+        logger.error(f"Error during booking process - ID: {booking_id}, Error: {str(e)}", exc_info=True)
         raise e
     finally:
         if record:
-            logging.info("Finalizing recording")
+            logger.info("Finalizing recording")
             # Stop the recording thread
             stop_recording = True
             recording_thread.join(timeout=2)  # Wait up to 2 seconds for thread to finish
             out.release()  # Release the video writer
 
-        logging.info("Closing Chrome driver")
+        logger.info("Closing Chrome driver")
         driver.quit()
 
         # Cleanup the temporary profile
@@ -480,10 +488,10 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
         try:
             shutil.rmtree(f"/tmp/chrome-profile-{booking_id}")
         except OSError as e:
-            logging.warning(f"Failed to remove Chrome profile directory: {e}")
+            logger.warning(f"Failed to remove Chrome profile directory: {e}")
 
 
-def wait_until_7am():
+def wait_until_7am(logger=None):
     # Wait until exactly 7:00:00 before selecting "Mañana"
     current_time = datetime.now(ZoneInfo("Europe/Madrid")).time()
     target_time = datetime.strptime("07:00:00", "%H:%M:%S").replace(tzinfo=ZoneInfo("Europe/Madrid")).time()
@@ -492,7 +500,7 @@ def wait_until_7am():
         wait_seconds = (
             datetime.combine(datetime.today(), target_time) - datetime.combine(datetime.today(), current_time)
         ).total_seconds()
-        logging.info(f"Waiting {wait_seconds:.2f} seconds until 7:00:00")
+        logger.info(f"Waiting {wait_seconds:.2f} seconds until 7:00:00")
         time.sleep(wait_seconds)
 
 
