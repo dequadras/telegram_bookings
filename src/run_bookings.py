@@ -8,7 +8,6 @@ from booking import handle_many_bookings
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("bookings.log"), logging.StreamHandler()],  # This will also print to console
 )
 
 if __name__ == "__main__":

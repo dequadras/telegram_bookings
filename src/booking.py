@@ -27,10 +27,19 @@ from database import DatabaseManager
 # todo (later)retry booking if it fails
 # Add at the top of the file, after imports
 logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - [Booking %(booking_id)s] %(message)s",
     level=logging.INFO,
-    datefmt="%Y-%m-%d %H:%M:%S",
+    format="%(asctime)s - %(levelname)s - %(message)s",
 )
+
+# Create a separate logger for booking-related logs
+booking_logger = logging.getLogger("booking")
+booking_formatter = logging.Formatter(
+    "%(asctime)s - %(levelname)s - [Booking %(booking_id)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+)
+handler = logging.StreamHandler()
+handler.setFormatter(booking_formatter)
+booking_logger.addHandler(handler)
+booking_logger.propagate = False  # Prevent duplicate logging
 
 CHROMEDRIVER_PATH = "/root/.wdm/drivers/chromedriver/linux64/131.0.6778.204/chromedriver-linux64/chromedriver"
 
@@ -124,14 +133,14 @@ class BookingLogger:
         self.db.execute_query(query, (telegram_id, message_type, message_text))
 
 
-# Create a global instance
-booking_logger = BookingLogger()
+# Rename the global instance of BookingLogger to avoid conflict
+conversation_logger = BookingLogger()
 
 
 async def process_booking(booking_id, telegram_id, booking_time, username, password, sport, player_nifs, test=False):
     """Process a single booking asynchronously."""
     # Add booking_id to logger's extra info
-    logger = logging.LoggerAdapter(logging.getLogger(), {"booking_id": booking_id})
+    logger = logging.LoggerAdapter(booking_logger, {"booking_id": booking_id})
     logger.info(f"Starting booking process - User: {username}, Time: {booking_time}")
     bot = Bot(token=CONFIG["bot"].TOKEN)
     admin_id = 249843154
@@ -151,7 +160,7 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
             logger=logger,
         )
 
-        if not test:
+        if not test and telegram_id > 50:
             logger.info("Updating booking status to completed")
             with get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -176,7 +185,7 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
             )
 
             # Log bot's response before sending
-            await booking_logger.log_conversation(telegram_id, "bot_response", success_message)
+            await conversation_logger.log_conversation(telegram_id, "bot_response", success_message)
             await bot.send_message(chat_id=telegram_id, text=success_message)
 
         logger.info(f"Booking completed successfully - User: {username}, Time: {booking_time}")
@@ -198,12 +207,12 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
         )
 
         logger.error(f"Booking failed - User: {username}, Error: {str(e)}", exc_info=True)
-        if not test:
+        if not test and telegram_id > 50:
             # Log error messages before sending
-            await booking_logger.log_conversation(telegram_id, "bot_response", error_message)
+            await conversation_logger.log_conversation(telegram_id, "bot_response", error_message)
             await bot.send_message(chat_id=telegram_id, text=error_message)
 
-            await booking_logger.log_conversation(admin_id, "bot_response", admin_error_message)
+            await conversation_logger.log_conversation(admin_id, "bot_response", admin_error_message)
             await bot.send_message(chat_id=admin_id, text=admin_error_message, parse_mode="Markdown")
             logger.info(f"Updating booking status to failed - ID: {booking_id}")
             with get_db_connection() as conn:
@@ -218,7 +227,7 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
                 )
                 conn.commit()
 
-        print(f"Booking failed for user {username}: {str(e)}")
+        logger.info(f"Booking failed for user {username}: {str(e)}")
 
 
 def get_available_port():
@@ -406,7 +415,7 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
             # Wait for and get the name that appears after NIF validation
             name1_field = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "txtName1")))
             name1 = name1_field.get_attribute("value")
-            print(f"First player name: {name1}")
+            logger.info(f"First player name: {name1}")
 
             # Input second player NIF
             nif2_field = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "txtNIF2")))
@@ -416,7 +425,7 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
             # Get second player name
             name2_field = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "txtName2")))
             name2 = name2_field.get_attribute("value")
-            print(f"Second player name: {name2}")
+            logger.info(f"Second player name: {name2}")
 
             # Input third player NIF
             nif3_field = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "txtNIF3")))
@@ -426,7 +435,7 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
             # Get third player name
             name3_field = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "txtName3")))
             name3 = name3_field.get_attribute("value")
-            print(f"Third player name: {name3}")
+            logger.info(f"Third player name: {name3}")
 
             # After getting each player's name
             for nif, name in [(player_nifs[0], name1), (player_nifs[1], name2), (player_nifs[2], name3)]:
@@ -440,7 +449,7 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
             # Wait for and get the name that appears after NIF validation
             name1_field = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, "txtName")))
             name1 = name1_field.get_attribute("value")
-            print(f"First player name: {name1}")
+            logger.info(f"First player name: {name1}")
 
             # After getting player's name
             DB.add_player(nif=player_nifs[0], name=name1)
@@ -587,4 +596,4 @@ if __name__ == "__main__":
     # )
     # test_check_credentials_valid()
     # test_check_credentials_invalid()
-    print("done")
+    logging.info("done")

@@ -134,13 +134,17 @@ Test de carga
 ```sql
 INSERT INTO users (telegram_id, username, password, first_name, booking_credits, created_at)
 VALUES
-    (10, '46152627E', 'Lucas19994', 'Ldq', 5, CURRENT_TIMESTAMP),
+    (10, '46152627E', 'Lucas1994', 'Ldq', 5, CURRENT_TIMESTAMP),
     (11, '21775603P', 'Roman2003', 'Rdq', 5, CURRENT_TIMESTAMP);
 
 INSERT INTO bookings (telegram_id, booking_date, booking_time, status, sport, player_nifs, is_premium)
 VALUES
-    (10, '2025-01-16', '18:30', 'pending', 'padel', '["46151293E", "21775603P", "60432112A"]', 1),
-    (11, '2025-01-16', '18:30', 'pending', 'padel', '["46151293E", "46152627E", "60432112A"]', 1);
+    (10, '2025-01-18', '14:00', 'pending', 'padel', '["46151293E", "21775603P", "60432112A"]', 1),
+    (11, '2025-01-18', '15:00', 'pending', 'padel', '["46151293E", "46152627E", "60432112A"]', 1),
+    (249843154, '2025-01-18', '15:00', 'pending', 'padel', '["60432112A", "60105994W", "46152627E"]', 1),
+    (10, '2025-01-18', '14:00', 'pending', 'padel', '["46151293E", "21775603P", "60432112A"]', 0),
+    (11, '2025-01-18', '15:00', 'pending', 'padel', '["46151293E", "46152627E", "60432112A"]', 0),
+    (249843154, '2025-01-18', '15:00', 'pending', 'padel', '["60432112A", "60105994W", "46152627E"]', 0);
 
 DELETE FROM users WHERE telegram_id in (10, 11);
 DELETE FROM bookings WHERE telegram_id in (10, 11);
