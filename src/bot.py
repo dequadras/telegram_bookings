@@ -198,9 +198,9 @@ class TenisBookingBot:
                     keyboard.append([KeyboardButton(display_text)])
 
             reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-            await query.message.reply_text(
-                "Por favor, selecciona el jugador 2 o introduce un nuevo NIF:", reply_markup=reply_markup
-            )
+            message = "Por favor, selecciona el jugador 2 o introduce un nuevo NIF:"
+            await self.log_conversation(update.effective_user.id, "bot_response", message)
+            await query.message.reply_text(message, reply_markup=reply_markup)
             return ENTERING_PLAYER2
 
         # If no credentials, ask for them
@@ -211,17 +211,20 @@ class TenisBookingBot:
         """Handle ID input and ask for password"""
         user_id = update.message.text.upper()
         if not self.validate_nif(user_id):
-            self.logger.warning(f"User {update.effective_user.id} entered invalid NIF: {user_id}")
-            await update.message.reply_text("El NIF introducido no es válido. Por favor, introduce un NIF válido:")
+            error_message = "El NIF introducido no es válido. Por favor, introduce un NIF válido:"
+            await self.log_conversation(update.effective_user.id, "bot_response", error_message)
+            await update.message.reply_text(error_message)
             return ENTERING_ID
 
         self.logger.info(f"User {update.effective_user.id} entered valid NIF")
         context.user_data["user_id"] = user_id
 
-        await update.message.reply_text(
+        password_prompt = (
             "Por favor, introduce tu contraseña de rcpolo.com (por defecto es nombre y año de "
             "nacimiento. ej: Pedro1982):"
         )
+        await self.log_conversation(update.effective_user.id, "bot_response", password_prompt)
+        await update.message.reply_text(password_prompt)
         return ENTERING_PASSWORD
 
     async def collect_password(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -265,7 +268,9 @@ class TenisBookingBot:
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Cancel and end the conversation."""
         self.logger.info(f"User {update.effective_user.id} cancelled the booking process")
-        await update.message.reply_text("Booking process cancelled. You can start a new booking with /book")
+        message = "Booking process cancelled. You can start a new booking with /book"
+        await self.log_conversation(update.effective_user.id, "bot_response", message)
+        await update.message.reply_text(message)
         return ConversationHandler.END
 
     async def confirm_booking(self, update: Update, context: ContextTypes.DEFAULT_TYPE, query=None):
@@ -277,6 +282,7 @@ class TenisBookingBot:
             credits = self.db.get_user_credits(user.id)
             if credits <= 0:
                 message = "❌ No tienes reservas disponibles.\n\n" "Puedes conseguir más reservas usando /getcredits"
+                await self.log_conversation(user.id, "bot_response", message)
                 if query:
                     await query.edit_message_text(message)
                 else:
@@ -286,6 +292,7 @@ class TenisBookingBot:
             # Deduct one credit only for premium bookings
             if not self.db.deduct_booking_credit(user.id):
                 message = "❌ Error al procesar la reserva.\n" "Por favor, intenta de nuevo o contacta con soporte."
+                await self.log_conversation(user.id, "bot_response", message)
                 if query:
                     await query.edit_message_text(message)
                 else:
@@ -348,7 +355,10 @@ class TenisBookingBot:
         # Only add remaining credits info for premium bookings
         if context.user_data.get("is_premium", False):
             remaining_credits = self.db.get_user_credits(user.id)
-            message += f"\n\nTe quedan {remaining_credits} reservas disponibles."
+            message += f"\n\nTe quedan {remaining_credits} reservas premium disponibles."
+
+        # Log the message before sending
+        await self.log_conversation(update.effective_user.id, "bot_response", message)
 
         if query:
             await query.edit_message_text(message)
@@ -385,10 +395,9 @@ class TenisBookingBot:
                 keyboard.append([KeyboardButton(display_text)])
 
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-
-        await update.message.reply_text(
-            f"Por favor, selecciona el jugador {player_number} o introduce un nuevo NIF:", reply_markup=reply_markup
-        )
+        message = f"Por favor, selecciona el jugador {player_number} o introduce un nuevo NIF:"
+        await self.log_conversation(user_id, "bot_response", message)
+        await update.message.reply_text(message, reply_markup=reply_markup)
 
         # Return the appropriate state based on player number
         return {2: ENTERING_PLAYER2, 3: ENTERING_PLAYER3, 4: ENTERING_PLAYER4}[player_number]
@@ -407,8 +416,10 @@ class TenisBookingBot:
 
         # Validate NIF
         if not self.validate_nif(nif):
+            message = f"El NIF del jugador {player_number} no es válido. Por favor, introduce un NIF válido:"
+            await self.log_conversation(update.effective_user.id, "bot_response", message)
             await update.message.reply_text(
-                f"El NIF del jugador {player_number} no es válido. Por favor, introduce un NIF válido:",
+                message,
                 reply_markup=ReplyKeyboardRemove(),
             )
             return {2: ENTERING_PLAYER2, 3: ENTERING_PLAYER3, 4: ENTERING_PLAYER4}[player_number]
@@ -457,36 +468,46 @@ class TenisBookingBot:
         user_id = update.effective_user.id
         credits = self.db.get_user_credits(user_id)
 
-        await update.message.reply_text(
+        message = (
             f"🎾 Información de tu cuenta:\n\n"
             f"Reservas disponibles: {credits}\n\n"
             "Puedes conseguir 10 reservas adicionales usando /getcredits"
         )
+        await self.log_conversation(user_id, "bot_response", message)
+        await update.message.reply_text(message)
 
     async def buy_credits_premium(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the purchase of additional booking credits"""
         paypal_link = "https://www.sandbox.paypal.com/ncp/payment/6MBDS94TBXXEA"
 
-        await update.message.reply_text(
+        message = (
             "🎯 Comprar reservas adicionales:\n\n"
             "• 5 reservas por 5€\n"
             "• Pago seguro con PayPal\n\n"
             "Para completar tu compra:\n"
             f"1️⃣ [Haz click aquí para pagar]({paypal_link})\n"
             "2️⃣ Las reservas se añadirán automáticamente a tu cuenta\n\n"
-            "_Las reservas no caducan_",
+            "_Las reservas no caducan_"
+        )
+
+        await self.log_conversation(update.effective_user.id, "bot_response", message)
+        await update.message.reply_text(
+            message,
             parse_mode="Markdown",
             disable_web_page_preview=True,
         )
 
     async def buy_credits(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the purchase of additional booking credits"""
-        await update.message.reply_text(
+        message = (
             "🔜 *Reservas premium*\n\n"
             "Esta funcionalidad estará disponible próximamente.\n\n"
-            "Por favor, vuelve a intentarlo en unas semanas.",
-            parse_mode="Markdown",
+            "Por favor, vuelve a intentarlo en unas semanas."
         )
+
+        # Log bot's response
+        await self.log_conversation(update.effective_user.id, "bot_response", message)
+        await update.message.reply_text(message, parse_mode="Markdown")
 
     async def help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /help command"""
@@ -502,6 +523,8 @@ class TenisBookingBot:
             "📧 Si tienes problemas, escribe a autobooking6@gmail.com"
         )
 
+        # Log bot's response
+        await self.log_conversation(update.effective_user.id, "bot_response", help_text)
         await update.message.reply_text(help_text, parse_mode="Markdown")
 
     async def mybookings(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -511,7 +534,9 @@ class TenisBookingBot:
         bookings = self.db.get_user_bookings(user_id)
 
         if not bookings:
-            await update.message.reply_text("No tienes reservas pendientes. Usa /book para hacer una nueva reserva.")
+            message = "No tienes reservas pendientes. Usa /book para hacer una nueva reserva."
+            await self.log_conversation(user_id, "bot_response", message)
+            await update.message.reply_text(message)
             return
 
         message = "📅 *Tus Reservas:*\n\n"
@@ -541,6 +566,7 @@ class TenisBookingBot:
                 )
 
         reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+        await self.log_conversation(user_id, "bot_response", message)
         await update.message.reply_text(message, parse_mode="Markdown", reply_markup=reply_markup)
 
     def _format_status(self, status: str) -> str:
@@ -593,21 +619,27 @@ class TenisBookingBot:
         """Handle when user decides not to cancel the booking"""
         query = update.callback_query
         await query.answer()
-        await query.edit_message_text("✅ Tu reserva se ha mantenido sin cambios.")
+        message = "✅ Tu reserva se ha mantenido sin cambios."
+        await self.log_conversation(update.effective_user.id, "bot_response", message)
+        await query.edit_message_text(message)
 
     async def select_booking_type(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Ask user to select between premium and free booking"""
         keyboard = [
             [
-                InlineKeyboardButton("Premium (7:00) - 1 crédito", callback_data="booking_premium"),
+                InlineKeyboardButton("Premium (7:00)", callback_data="booking_premium"),
                 InlineKeyboardButton("Básica (8:00)", callback_data="booking_free"),
             ]
         ]
 
-        await update.message.reply_text(
+        message = (
             "Por favor, selecciona el tipo de reserva:\n\n"
-            "🌟 *Premium*: Se intenta reservar a las 7:00 (coste: 1 crédito)\n"
-            "🆓 *Básica*: Se intenta reservar a las 8:00 (sin coste, menor probabilidad)",
+            "🌟 *Premium*: Se intenta reservar a las 7:00 (1 crédito)\n"
+            "🎾 *Básica*: Se intenta reservar a las 8:00"
+        )
+        await self.log_conversation(update.effective_user.id, "bot_response", message)
+        await update.message.reply_text(
+            message,
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown",
         )
@@ -637,18 +669,24 @@ class TenisBookingBot:
     async def update_password(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /password command to update credentials"""
         self.logger.info(f"User {update.effective_user.id} updating credentials")
-        await update.message.reply_text("Por favor, introduce tu nuevo usuario (NIF):")
+        message = "Por favor, introduce tu nuevo usuario (NIF):"
+        await self.log_conversation(update.effective_user.id, "bot_response", message)
+        await update.message.reply_text(message)
         return UPDATING_ID
 
     async def handle_update_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle new ID input when updating credentials"""
         user_id = update.message.text.upper()
         if not self.validate_nif(user_id):
-            await update.message.reply_text("El NIF introducido no es válido. Por favor, introduce un NIF válido:")
+            error_message = "El NIF introducido no es válido. Por favor, introduce un NIF válido:"
+            await self.log_conversation(update.effective_user.id, "bot_response", error_message)
+            await update.message.reply_text(error_message)
             return UPDATING_ID
 
         context.user_data["new_user_id"] = user_id
-        await update.message.reply_text("Por favor, introduce tu nueva contraseña:")
+        message = "Por favor, introduce tu nueva contraseña:"
+        await self.log_conversation(update.effective_user.id, "bot_response", message)
+        await update.message.reply_text(message)
         return UPDATING_PASSWORD
 
     async def handle_update_password(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -661,7 +699,9 @@ class TenisBookingBot:
             telegram_id=user_id, username=context.user_data["new_user_id"], password=new_password
         )
 
-        await update.message.reply_text("✅ Tus credenciales han sido actualizadas correctamente.")
+        message = "✅ Tus credenciales han sido actualizadas correctamente."
+        await self.log_conversation(update.effective_user.id, "bot_response", message)
+        await update.message.reply_text(message)
         return ConversationHandler.END
 
     def run(self):
@@ -753,11 +793,11 @@ class TenisBookingBot:
 
 async def post_init(application: Application) -> None:
     await application.bot.set_my_description(
-        "¡Hola! Soy el bot de reservas del RCPolo. Pulsa 'Iniciar' para empezar. 🎾\n"
+        "¡Hola! Soy el bot de reservas del RCPolo. Pulsa 'Start' para empezar. 🎾\n"
         'Este bot se "despierta" a las 7am para procesar las reservas de pistas. Si alguna vez te has visto en la'
         " situación de no tener pistas disponibles por haberte despertado tarde, esto puede ser tu solución.\n"
         "Usa el comando /book para empezar una reserva. Esta se guardará y se gestionará el día anterior a la "
-        "reserva a las 7am\n"
+        "reserva a las 7am.\n"
         "Encontrarás más información con el comando /help"
     )
 
