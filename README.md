@@ -149,3 +149,5 @@ VALUES
 DELETE FROM users WHERE telegram_id in (10, 11);
 DELETE FROM bookings WHERE telegram_id in (10, 11);
 ```
+
+less +G /var/log/polo-bot.log

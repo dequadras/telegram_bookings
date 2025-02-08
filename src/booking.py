@@ -56,6 +56,14 @@ def get_db_connection():
         conn.close()
 
 
+def get_user_type(telegram_id: int) -> str:
+    if telegram_id < 50:
+        return 0  # FAKE
+    if telegram_id in (249843154,):
+        return 1  # TEST
+    return 2  # REAL
+
+
 async def handle_many_bookings(test=False, is_premium=False):
     """
     Handle all pending bookings for tomorrow. Executed at 7am each day.
@@ -155,12 +163,13 @@ async def process_booking(booking_id, telegram_id, booking_time, username, passw
             hour=booking_time,
             credentials={"username": username, "password": password},
             player_nifs=player_nifs,
+            telegram_id=telegram_id,
             record=True,
             test=test,
             logger=logger,
         )
 
-        if not test and telegram_id > 50:
+        if not test and get_user_type(telegram_id) >= 1:  # non fake user
             logger.info("Updating booking status to completed")
             with get_db_connection() as conn:
                 cursor = conn.cursor()
@@ -261,7 +270,9 @@ def get_driver(booking_id=None):
     return driver
 
 
-def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=True, test=True, logger=None):
+def make_booking(
+    booking_id, sport, day, hour, credentials, player_nifs, telegram_id, record=True, test=True, logger=None
+):
     """
     Make a booking at RC Polo.
 
@@ -458,7 +469,7 @@ def make_booking(booking_id, sport, day, hour, credentials, player_nifs, record=
         conditions_checkbox.click()
 
         reserve_button = driver.find_element(By.XPATH, "//button[@id='btnSubmit' and contains(text(), 'Reservar')]")
-        if not test:
+        if not test and get_user_type(telegram_id) == 2:  # non test user
             reserve_button.click()
             # Wait a bit to ensure the booking is completed
             time.sleep(2)
@@ -577,15 +588,15 @@ if __name__ == "__main__":
     # asyncio.run(start_scheduler())
     # res = asyncio.run(handle_many_bookings(test=True))
 
-    # make_booking(
-    #     booking_id=1,
-    #     sport='padel',
-    #     day='Mañana',
-    #     hour='10:00',
-    #     credentials=credentials,
-    #     player_nifs=player_nifs,
-    #     test=True
-    # )
+    make_booking(
+        booking_id=1,
+        sport="padel",
+        day="Mañana",
+        hour="10:00",
+        credentials=credentials,
+        player_nifs=player_nifs,
+        test=True,
+    )
     # make_booking(
     #     booking_id=1,
     #     sport='tenis',

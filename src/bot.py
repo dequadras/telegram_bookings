@@ -74,18 +74,37 @@ class TenisBookingBot:
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle the /start command"""
-        # Log user's message
-        await self.log_conversation(update.effective_user.id, "user_message", "Command: /start")
-
         user = update.effective_user
-        self.logger.info(f"New user started bot: {user.id} ({user.username})")
-        self.db.add_user(
-            telegram_id=user.id,
-            username=user.username,
-            password=None,
-            first_name=user.first_name,
-            last_name=user.last_name,
-        )
+        self.logger.info(f"User {user.id} ({user.username}) initiated /start command.")
+
+        # Check if the user already exists
+        existing_user = self.db.get_user(user.id)
+
+        if not existing_user:
+            # Log user's message
+            await self.log_conversation(user.id, "user_message", "Command: /start")
+
+            # Add new user to the database
+            self.db.add_user(
+                telegram_id=user.id,
+                username=user.username,
+                password=None,
+                first_name=user.first_name,
+                last_name=user.last_name,
+            )
+
+            # Notify the administrator about the new user
+            admin_message = (
+                f"📢 *Nuevo Usuario Registrado*\n\n"
+                f"*Nombre:* {user.first_name or 'N/A'} {user.last_name or ''}\n"
+                f"*Username:* @{user.username or 'N/A'}\n"
+                f"*Telegram ID:* {user.id}"
+            )
+            await self.notify_admin(admin_message)
+
+            self.logger.info(f"New user added: {user.id} ({user.username})")
+        else:
+            self.logger.info(f"Existing user {user.id} ({user.username}) initiated /start.")
 
         welcome_text = (
             f"¡Bienvenido/a {user.first_name}! 🎾\n\n"
@@ -97,7 +116,7 @@ class TenisBookingBot:
         )
 
         # Log bot's response
-        await self.log_conversation(update.effective_user.id, "bot_response", welcome_text)
+        await self.log_conversation(user.id, "bot_response", welcome_text)
 
         await update.message.reply_text(welcome_text)
 

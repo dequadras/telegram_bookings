@@ -298,3 +298,37 @@ class DatabaseManager:
             cursor = conn.cursor()
             cursor.execute(query, (telegram_id, limit))
             return cursor.fetchall()
+
+    def get_user(self, telegram_id: int) -> Optional[Dict]:
+        """
+        Retrieve a user's details from the database.
+
+        Args:
+            telegram_id (int): The Telegram ID of the user.
+
+        Returns:
+            Optional[Dict]: A dictionary with user details if found, else None.
+        """
+        query = """
+            SELECT telegram_id, username, password, first_name, last_name, booking_credits
+            FROM users
+            WHERE telegram_id = ?
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, (telegram_id,))
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        "telegram_id": row[0],
+                        "username": row[1],
+                        "password": row[2],
+                        "first_name": row[3],
+                        "last_name": row[4],
+                        "booking_credits": row[5],
+                    }
+                return None
+        except Exception as e:
+            logging.error(f"Failed to retrieve user {telegram_id}: {e}")
+            return None
