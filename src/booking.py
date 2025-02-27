@@ -350,10 +350,10 @@ def make_booking(
         driver.get("https://rcpolo.com/")
         time.sleep(3)
         # Take a screenshot after loading the website
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        screenshot_path = f"polo_website_{booking_id}_{timestamp}.png"
-        driver.save_screenshot(screenshot_path)
-        logger.info(f"Saved website screenshot to {screenshot_path}")
+        # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # screenshot_path = f"polo_website_{booking_id}_{timestamp}.png"
+        # driver.save_screenshot(screenshot_path)
+        # logger.info(f"Saved website screenshot to {screenshot_path}")
 
         logger.info("Handling cookie consent")
         # Click accept all cookies button
@@ -519,7 +519,7 @@ def wait_until_7am(logger=None):
     if current_time < target_time:
         wait_seconds = (
             datetime.combine(datetime.today(), target_time) - datetime.combine(datetime.today(), current_time)
-        ).total_seconds()
+        ).total_seconds() - 1  # one second less, check if it performs better
         logger.info(f"Waiting {wait_seconds:.2f} seconds until 7:00:00")
         time.sleep(wait_seconds)
 
